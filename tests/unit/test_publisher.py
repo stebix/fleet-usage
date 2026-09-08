@@ -890,3 +890,53 @@ def test_a_previous_error_is_cleared_on_success(
     run(settings, app_paths, client, sleeps)
 
     assert stored_ledger(client).agents['claude'].last_error is None
+
+
+def test_an_unreachable_ledger_fetch_still_spools_the_collection(
+    settings, app_paths, monkeypatch, sleeps
+):
+    class Unreachable(FakeGitHub):
+        def get_file(self, path):
+            raise NetworkError('connection refused', path=path)
+
+        def put_file(self, path, content, message, sha=None):
+            raise NetworkError('connection refused', path=path)
+
+    client = Unreachable()
+    document = make_snapshot()
+    monkeypatch.setattr(publisher, 'collect_snapshot', fake_collect(document))
+
+    first = run(settings, app_paths, client, sleeps)
+    later = make_snapshot(collected_at=NOW + dt.timedelta(hours=1))
+    monkeypatch.setattr(publisher, 'collect_snapshot', fake_collect(later))
+    second = run(
+        settings, app_paths, client, sleeps, now=NOW + dt.timedelta(hours=1)
+    )
+
+    assert first.exit_code is ExitCode.SPOOLED_NOT_UPLOADED
+    assert first.spooled is True
+    assert first.pending == 1
+    assert '1 snapshot' in first.message
+    assert second.exit_code is ExitCode.SPOOLED_NOT_UPLOADED
+    assert second.spooled is False
+    assert second.deduplicated is True
+    assert len(spool.list_spool(app_paths.spool_dir)) == 1
+
+
+def test_a_rejected_token_on_the_ledger_fetch_still_spools(
+    settings, app_paths, monkeypatch, sleeps
+):
+    class Rejected(FakeGitHub):
+        def get_file(self, path):
+            raise AuthError('401 bad credentials', path=path)
+
+    client = Rejected()
+    monkeypatch.setattr(
+        publisher, 'collect_snapshot', fake_collect(make_snapshot())
+    )
+
+    result = run(settings, app_paths, client, sleeps)
+
+    assert result.exit_code is ExitCode.AUTH_FAILURE
+    assert result.spooled is True
+    assert len(spool.list_spool(app_paths.spool_dir)) == 1

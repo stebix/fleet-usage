@@ -1094,51 +1094,55 @@ def _run(
 
     client = client_factory(settings, token)
     try:
-        try:
-            ledger, sha = _fetch_ledger(
-                client, settings, machine.id, machine.label
-            )
-        except RemoteConflictError as exc:
-            return PublishResult(
-                exit_code=ExitCode.REMOTE_CONFLICT, message=str(exc)
-            )
-        except RateLimitError as exc:
-            pending = len(spool.list_spool(paths.spool_dir))
-            return PublishResult(
-                exit_code=ExitCode.SPOOLED_NOT_UPLOADED,
-                message=f'cannot reach GitHub: {exc}',
-                pending=pending,
-            )
-        except AuthError as exc:
-            return PublishResult(
-                exit_code=ExitCode.AUTH_FAILURE, message=str(exc)
-            )
-        except GitHubError as exc:
-            pending = len(spool.list_spool(paths.spool_dir))
-            return PublishResult(
-                exit_code=ExitCode.SPOOLED_NOT_UPLOADED,
-                message=f'cannot reach GitHub: {exc}',
-                pending=pending,
-            )
-
+        # Collect and spool before touching the remote: a machine that
+        # cannot reach GitHub must still bank this hour's observation.
         try:
             document = collect_snapshot(settings, now=now)
         except CollectorError as exc:
             _LOGGER.error('collection failed: %s', exc)
             collection_error = exc
 
+        ledger: Ledger | None = None
+        sha: str | None = None
+        fetch_failure: PublishResult | None = None
+        try:
+            ledger, sha = _fetch_ledger(
+                client, settings, machine.id, machine.label
+            )
+        except RemoteConflictError as exc:
+            fetch_failure = PublishResult(
+                exit_code=ExitCode.REMOTE_CONFLICT, message=str(exc)
+            )
+        except RateLimitError as exc:
+            fetch_failure = PublishResult(
+                exit_code=ExitCode.SPOOLED_NOT_UPLOADED,
+                message=f'cannot reach GitHub: {exc}',
+            )
+        except AuthError as exc:
+            fetch_failure = PublishResult(
+                exit_code=ExitCode.AUTH_FAILURE, message=str(exc)
+            )
+        except GitHubError as exc:
+            fetch_failure = PublishResult(
+                exit_code=ExitCode.SPOOLED_NOT_UPLOADED,
+                message=f'cannot reach GitHub: {exc}',
+            )
+
         cache: dict[str, Snapshot] = {}
         if document is not None:
             spooled_hash = _newest_spooled_hash(paths.spool_dir)
             digest = snapshot_module.short_hash(document.agents_hash)
-            if document.agents_hash == ledger.last_agents_hash:
+            if (
+                ledger is not None
+                and document.agents_hash == ledger.last_agents_hash
+            ):
                 _LOGGER.info('collection is unchanged, nothing to spool')
                 deduplicated = True
             elif spooled_hash == digest:
-                # The remote is behind, so the ledger cannot vouch for
-                # this payload, but the spool can: a machine that stays
-                # offline must not accumulate one identical snapshot
-                # per run.
+                # The remote is behind or unreachable, so the ledger
+                # cannot vouch for this payload, but the spool can: a
+                # machine that stays offline must not accumulate one
+                # identical snapshot per run.
                 _LOGGER.info(
                     'collection equals the newest spooled snapshot, '
                     'nothing to spool'
@@ -1147,6 +1151,31 @@ def _run(
             else:
                 spool.write_snapshot(paths.spool_dir, document)
                 spooled = True
+
+        if fetch_failure is not None or ledger is None:
+            pending = len(spool.list_spool(paths.spool_dir))
+            failure = fetch_failure or PublishResult(
+                exit_code=ExitCode.SPOOLED_NOT_UPLOADED,
+                message='cannot reach GitHub',
+            )
+            if failure.exit_code is ExitCode.SPOOLED_NOT_UPLOADED:
+                noun = 'snapshot' if pending == 1 else 'snapshots'
+                message = (
+                    f'{pending} {noun} stay in the spool and will be '
+                    f'uploaded on the next run ({failure.message})'
+                    if pending
+                    else failure.message
+                )
+            else:
+                message = failure.message
+            return dataclasses.replace(
+                failure,
+                message=message,
+                snapshot=document,
+                spooled=spooled,
+                deduplicated=deduplicated,
+                pending=pending,
+            )
 
         drained = _drain(client, paths.spool_dir, sleep=sleep)
         uploaded = drained.uploaded

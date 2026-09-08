@@ -84,17 +84,17 @@ Related implementation: IMP-201 through IMP-207 (IMP-206 removed).
 
 Related implementation: IMP-301 through IMP-306.
 
-- [ ] G3-01: Bootstrap an explicitly designated disposable private data repository with the manifest, README workflow, and renderer script; repeat without duplicate or destructive changes; `--update` refreshes only the workflow and script.
+- [x] G3-01: Bootstrap an explicitly designated disposable private data repository with the manifest, README workflow, and renderer script; repeat without duplicate or destructive changes; `--update` refreshes only the workflow and script.
 - [ ] G3-02: Existing repository initialization does not create another repository; creation occurs only with the explicit creation option; `repo register` appends exactly one manifest entry per identity.
 - [ ] G3-03: Routine publisher credentials can upload snapshots and ledgers; reader credentials cannot upload; workflow-file permission is needed only for `repo init` and is documented separately.
 - [x] G3-04: Re-uploading an identical snapshot produces no extra file or duplicate successful commit; different content at the same path is rejected as a hard error.
 - [x] G3-05: Simulate server acceptance followed by lost client response; the retry verifies the existing snapshot by content and deletes the spool file once.
-- [ ] G3-06: A ledger PUT with a stale blob SHA is retried after refetch and remerge; concurrent uploads from different publishers survive branch-reference races without lost snapshots or force pushes.
+- [x] G3-06: A ledger PUT with a stale blob SHA is retried after refetch and remerge; concurrent uploads from different publishers survive branch-reference races without lost snapshots or force pushes.
 - [x] G3-07: Exercise bounded network/rate-limit retries, backlog throttling below secondary limits, and terminal authentication errors; spooled data survives all failures.
 - [ ] G3-08: Validate manifest identity/timezone/schema/freeze-window policies before accepting incompatible records into normal reports.
-- [ ] G3-09: The README workflow runs from the bundled script and manifest only, with no code-repository checkout, no private-code credential, and no dependency installation.
-- [ ] G3-10: Confirm application upload payloads contain only approved usage metadata, not `.env`, credentials, prompts, project names, or raw source logs.
-- [ ] G3-11: A crash between snapshot upload and ledger update is repaired on the next run by Trees-API listing after `applied_through`; the ledger then matches `rebuild`.
+- [x] G3-09: The README workflow runs from the bundled script and manifest only, with no code-repository checkout, no private-code credential, and no dependency installation.
+- [x] G3-10: Confirm application upload payloads contain only approved usage metadata, not `.env`, credentials, prompts, project names, or raw source logs.
+- [x] G3-11: A crash between snapshot upload and ledger update is repaired on the next run by Trees-API listing after `applied_through`; the ledger then matches `rebuild`.
 - [ ] QA-G3: Exit gate passed; real GitHub and transport-failure evidence recorded.
 ## QA-G4: Aggregation, README publication, and viewing
 
@@ -107,7 +107,7 @@ Related implementation: IMP-401 through IMP-406 (IMP-403 removed).
 - [ ] G4-05: Anomalies are surfaced in `show` and the README with agent, date, kept and observed values, and snapshot path; the reserved corrections hook is exercised with a fixture.
 - [ ] G4-06: Timezone and freeze-window policy changes cannot silently blend incompatible history; unknown cost coverage is visible.
 - [ ] G4-07: The README workflow tolerates a publisher advancing the branch between checkout and write; the Contents API write retries with a fresh SHA and never force-pushes.
-- [ ] G4-08: README commits made with the built-in token do not trigger workflows; the workflow is schedule and manual dispatch only.
+- [x] G4-08: README commits made with the built-in token do not trigger workflows; the workflow is schedule and manual dispatch only.
 - [ ] G4-09: A failed README render leaves the previous README in place and the failure visible in the Actions log.
 - [ ] G4-10: Ledger and README output identify snapshot path, collector version, collection time, last run time, and render time as distinct fields.
 - [ ] G4-11: Missing expected machines, stale machines, unregistered ledgers, and collection anomalies appear in CLI and README output.

@@ -426,9 +426,13 @@ Local state is a spool directory of pending snapshots and a process lock.
 Nothing else. The ledger is always fetched from the remote before use.
 
 1. Acquire the local process lock. A second instance exits immediately.
-2. GET the remote ledger with its blob SHA. If absent, start empty.
-3. Run the unified ccusage call. Build the snapshot. If its `agents_hash`
-   equals the ledger's `last_agents_hash`, do not spool it. Otherwise write it
+2. Run the unified ccusage call and build the snapshot before any remote
+   call, so an unreachable GitHub still banks this hour's observation.
+3. GET the remote ledger with its blob SHA. If absent, start empty. If the
+   fetch fails, still decide spooling below, then exit with the pending
+   count (network) or the authentication error.
+   If the snapshot's `agents_hash` equals the ledger's `last_agents_hash`,
+   or the newest spooled file's hash, do not spool it. Otherwise write it
    to the spool via temporary file and rename. Configured agents absent from
    the output get status `ok` with no days; a failed ccusage run produces no
    snapshot, records the error against every configured agent in the ledger,

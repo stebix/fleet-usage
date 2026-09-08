@@ -421,3 +421,70 @@ For an interrupted batch, record partial work and leave its remaining boxes open
 - Validation: quality gate as recorded in HIST-005 at the same tree.
 - Next step: `fleet-usage init` on this machine with the real repository,
   token in the generated `.env`, then `repo init --create` and QA-G3.
+
+### 2026-09-08 — QA-G3 against the real data repository
+
+- History ID: HIST-007.
+- Request/context: the user created `stebix/fleet-usage-data` (private) and
+  supplied a token; `doctor` reported read and write access. Continue with
+  QA-G3.
+- Implementation tasks: IMP-302 hardened (see decision changes).
+- Changes: `src/fleet_usage/publisher.py` now collects and spools before
+  acting on a failed ledger fetch; two tests added in
+  `tests/unit/test_publisher.py`. Plan section 8 steps 2 and 3 reordered
+  to match.
+- Decision changes: an unreachable or rejecting GitHub no longer prevents
+  collection; the snapshot is spooled (deduplicated against the newest
+  spooled file) and the run exits 4 or 6 with the pending count. Found by
+  the real offline test below: before the fix, an offline machine spooled
+  nothing at all.
+- Validation, all against the real repository from the authoring machine:
+  - Bootstrap on the empty repository created `fleet.toml`, the workflow,
+    and the script (4 commits); repeated `repo init` kept all three;
+    `repo register` added one entry and reported "already registered" on
+    repeat. (G3-01, part of G3-02)
+  - First publish: 3.2 s, one 14 KB snapshot, 18 KB ledger, spool drained,
+    7 of 8 Claude days settled. Second publish: "uploaded 0, applied 0,
+    collection unchanged", ledger heartbeat advanced, no new snapshot.
+  - Re-spooling an already uploaded snapshot: PUT returned 422, the client
+    fetched and verified identical content, acknowledged the spool file,
+    and no duplicate snapshot commit appeared. (G3-04, G3-05)
+  - Two publishers (this identity and a scratch identity with its own
+    state directory) publishing concurrently: one PUT hit a 409 branch
+    reference race, was retried, and both snapshots and both ledgers
+    landed; both exited 0. (G3-06)
+  - Bogus token from the process environment: exit 6 with GitHub's 401
+    message; the process environment overrode `.env`. (G3-07 auth path
+    real; rate limits remain mocked-only)
+  - Orphan snapshot uploaded directly with the API and no ledger update:
+    the next publish reported "applied 1" and advanced `applied_through`
+    to it. (G3-11)
+  - Uploaded snapshot audited: only schema, identity, timezone, collector,
+    hash, and per-agent daily token/cost/model fields; no paths, project
+    names, or secrets. (G3-10)
+  - README workflow dispatched manually: completed in 16 s, wrote
+    `README.md` with machine table, totals, model table, and Mermaid chart;
+    the remote `scripts/render_readme.py` is byte-identical to the package
+    module; 21 pushes produced no push-triggered run. (G3-09, G4-08)
+  - Offline publish against an unreachable API host: after the fix, one
+    snapshot spooled, a second offline run deduplicated, and the reconnect
+    uploaded the spooled file. (G2-09 real evidence)
+  - Second identity viewed the fleet with `show` from its own cache and saw
+    both machines; noted as same-host evidence only, G4-13 stays open.
+  - Quality gate after the fix: ruff, format, mypy clean; 677 tests.
+- QA criteria/gates: G3-01, G3-06, G3-09, G3-10, G3-11, G4-08 checked.
+  G3-02 partial (repository creation with `--create` not exercised).
+  G3-03 pending: needs a read-only token. G3-08 pending: manifest policy
+  validation not implemented (IMP-305). QA-G3 exit stays open on those.
+- Environment: as HIST-004; `gh` 2.x authenticated for inspection and the
+  workflow dispatch; data repository at 21 commits after cleanup.
+- Evidence: data repository history (commits `b9c952f` through the cleanup
+  commits `f0a3580`, `392e48a`, `5a1bf48`), workflow run 34245772110.
+- Risks/limitations: the scratch twin identity was removed from
+  `fleet.toml`, its ledger and snapshot deleted from the working tree, and
+  they remain in git history; there is no `repo unregister` command yet.
+  A day whose models are only partly priced reports an unknown day-level
+  cost, so `show --by machine` shows no cost for today even though
+  `--by model` prices part of it; consider a partial-cost status.
+- Next step: obtain a read-only token for G3-03, decide on IMP-305, then
+  QA-G4 remainder and QA-G5 scheduler installs.
