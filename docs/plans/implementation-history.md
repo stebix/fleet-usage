@@ -408,3 +408,16 @@ For an interrupted batch, record partial work and leave its remaining boxes open
   backends in depth.
 - Next step: commit the baseline, then run QA-G3 against a disposable
   private data repository with a real token.
+
+### 2026-09-08 — Baseline committed
+
+- History ID: HIST-006.
+- Request/context: the user asked to commit the baseline and will supply
+  the data repository name and token.
+- Implementation tasks: none.
+- Changes: single commit `aeb1110` on `main` containing everything
+  described in HIST-001 through HIST-005. Where earlier entries say
+  "uncommitted", read that as this commit.
+- Validation: quality gate as recorded in HIST-005 at the same tree.
+- Next step: `fleet-usage init` on this machine with the real repository,
+  token in the generated `.env`, then `repo init --create` and QA-G3.
