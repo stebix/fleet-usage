@@ -1,0 +1,54 @@
+{
+  "agents": {
+    "claude": {
+      "days": [
+        {
+          "cache_create_tokens": 0,
+          "cache_read_tokens": 0,
+          "cost_status": "unknown",
+          "cost_usd": null,
+          "date": "2026-09-01",
+          "input_tokens": 10,
+          "models": [
+            {
+              "cache_create_tokens": 0,
+              "cache_read_tokens": 0,
+              "cost_status": "unknown",
+              "cost_usd": null,
+              "input_tokens": 10,
+              "model": "claude-fable-5-1",
+              "output_tokens": 2
+            }
+          ],
+          "output_tokens": 2,
+          "settled": false,
+          "source_collected_at": "2026-09-01T06:00:00Z"
+        }
+      ],
+      "last_error": null,
+      "last_success_at": "2026-09-01T06:00:00Z"
+    }
+  },
+  "anomalies": [
+    {
+      "agent": "claude",
+      "date": "2026-09-01",
+      "field": "input_tokens",
+      "kept": 10,
+      "kind": "decrease_refused",
+      "observed": 8,
+      "snapshot": "snapshots/33333333-3333-4333-8333-333333333333/2026-09/20260901T060000Z-abcdef12.json"
+    }
+  ],
+  "applied_through": null,
+  "label": "nuc | attic",
+  "last_agents_hash": null,
+  "last_run_at": "2026-09-01T06:00:00Z",
+  "machine_id": "33333333-3333-4333-8333-333333333333",
+  "merge_policy": {
+    "freeze_window_days": 5,
+    "timezone": "Europe/Berlin",
+    "version": 1
+  },
+  "schema_version": 1
+}

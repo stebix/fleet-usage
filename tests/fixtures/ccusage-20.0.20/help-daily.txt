@@ -1,0 +1,23 @@
+Show all detected coding (agent) CLI usage grouped by date
+
+USAGE:
+  ccusage daily <OPTIONS>
+
+OPTIONS:
+  -j, --json                           Output in JSON format (default: false)
+  -s, --since <since>                  Filter from date (YYYY-MM-DD or YYYYMMDD)
+  -u, --until <until>                  Filter until date (inclusive)
+  -z, --timezone <timezone>            Timezone for date grouping (IANA)
+  --all                                Accepted for compatibility; all detected supported agents are included by default (default: false)
+  --sections <sections>                Emit multiple unified report sections from one load (daily, weekly, monthly, session)
+  --by-agent                           Include per-agent JSON breakdowns in unified report rows (default: false)
+  -O, --offline                        Use cached pricing data where supported (default: false)
+  --no-offline                         Negatable of -O, --offline
+  --compact                            Force compact table layout for narrow terminals (default: false)
+  --no-cost                            Hide cost information in table and JSON output (default: false)
+  --color                              Enable colored output. FORCE_COLOR=1 has the same effect. (default: auto)
+  --no-color                           Disable colored output. NO_COLOR=1 has the same effect. (default: auto)
+  --config <config>                    Path to configuration file (default: auto-discovery)
+  -h, --help                           Display this help message
+  -v, --version                        Display this version
+  --last <last>                        Show only the most recent N periods of the report (1 is today, this week, or this month)

@@ -1,0 +1,125 @@
+{
+  "agents": {
+    "claude": {
+      "days": [
+        {
+          "cache_create_tokens": 300,
+          "cache_read_tokens": 400,
+          "cost_status": "estimated",
+          "cost_usd": "1.5000",
+          "date": "2026-09-01",
+          "input_tokens": 1500,
+          "models": [
+            {
+              "cache_create_tokens": 300,
+              "cache_read_tokens": 400,
+              "cost_status": "estimated",
+              "cost_usd": "1.2500",
+              "input_tokens": 1000,
+              "model": "claude-fable-5-1",
+              "output_tokens": 200
+            },
+            {
+              "cache_create_tokens": 0,
+              "cache_read_tokens": 0,
+              "cost_status": "estimated",
+              "cost_usd": "0.2500",
+              "input_tokens": 500,
+              "model": "claude-sonnet-4-6",
+              "output_tokens": 100
+            }
+          ],
+          "output_tokens": 300,
+          "settled": false,
+          "source_collected_at": "2026-09-02T03:00:00Z"
+        },
+        {
+          "cache_create_tokens": 0,
+          "cache_read_tokens": 1000,
+          "cost_status": "estimated",
+          "cost_usd": "2.0000",
+          "date": "2026-09-02",
+          "input_tokens": 2000,
+          "models": [
+            {
+              "cache_create_tokens": 0,
+              "cache_read_tokens": 1000,
+              "cost_status": "estimated",
+              "cost_usd": "2.0000",
+              "input_tokens": 2000,
+              "model": "claude-fable-5-1",
+              "output_tokens": 400
+            }
+          ],
+          "output_tokens": 400,
+          "settled": false,
+          "source_collected_at": "2026-09-03T03:00:00Z"
+        }
+      ],
+      "last_error": null,
+      "last_success_at": "2026-09-05T12:00:00Z"
+    },
+    "codex": {
+      "days": [
+        {
+          "cache_create_tokens": 0,
+          "cache_read_tokens": 0,
+          "cost_status": "unknown",
+          "cost_usd": null,
+          "date": "2026-09-01",
+          "input_tokens": 800,
+          "models": [
+            {
+              "cache_create_tokens": 0,
+              "cache_read_tokens": 0,
+              "cost_status": "unknown",
+              "cost_usd": null,
+              "input_tokens": 800,
+              "model": "gpt-5-codex",
+              "output_tokens": 150
+            }
+          ],
+          "output_tokens": 150,
+          "settled": false,
+          "source_collected_at": "2026-09-02T03:00:00Z"
+        },
+        {
+          "cache_create_tokens": 0,
+          "cache_read_tokens": 0,
+          "cost_status": "estimated",
+          "cost_usd": "0.1000",
+          "date": "2026-09-03",
+          "input_tokens": 100,
+          "models": [
+            {
+              "cache_create_tokens": 0,
+              "cache_read_tokens": 0,
+              "cost_status": "estimated",
+              "cost_usd": "0.1000",
+              "input_tokens": 100,
+              "model": "gpt-5-codex",
+              "output_tokens": 20
+            }
+          ],
+          "output_tokens": 20,
+          "settled": false,
+          "source_collected_at": "2026-09-04T03:00:00Z"
+        }
+      ],
+      "last_error": null,
+      "last_success_at": "2026-09-05T12:00:00Z"
+    }
+  },
+  "anomalies": [],
+  "applied_through": null,
+  "label": "fedora-mobile",
+  "last_agents_hash": null,
+  "last_run_at": "2026-09-05T12:00:00Z",
+  "machine_id": "11111111-1111-4111-8111-111111111111",
+  "merge_policy": {
+    "freeze_window_days": 5,
+    "timezone": "Europe/Berlin",
+    "version": 1
+  },
+  "schema_version": 1
+}
