@@ -488,3 +488,52 @@ For an interrupted batch, record partial work and leave its remaining boxes open
   `--by model` prices part of it; consider a partial-cost status.
 - Next step: obtain a read-only token for G3-03, decide on IMP-305, then
   QA-G4 remainder and QA-G5 scheduler installs.
+
+### 2026-09-08 — QA-G5 on the authoring machine: systemd user timer
+
+- History ID: HIST-008.
+- Request/context: the user asked to proceed with the timer installation.
+- Implementation tasks: IMP-501, IMP-502 hardened; IMP-505 still open.
+- Changes: `src/fleet_usage/scheduling/{base,cron,systemd,windows}.py`,
+  `commands/schedule.py`, `commands/doctor.py`: the scheduled job carries
+  the collector's directory on PATH (systemd `Environment=`, cron `env`
+  prefix), install refuses an unresolvable collector unless `--force`,
+  refuses a development-checkout executable unless `--allow-dev-checkout`,
+  and `doctor` gained `collector PATH` and `clock` rows. 53 tests added.
+- Decision changes: scheduled runs must not rely on the interactive PATH;
+  the stable executable is the `uv tool install` copy in `~/.local/bin`.
+- Validation on this Fedora-class Linux workstation:
+  - `schedule install --dry-run` printed both units and wrote nothing.
+  - `schedule install` wrote the units and enabled the timer; the natural
+    firing at 17:50:03 CEST ran under systemd and exited 3 because `bunx`
+    was not on systemd's PATH (`/usr/local/sbin:/usr/local/bin:/usr/sbin:
+    /usr/bin`). The failed run still advanced the ledger heartbeat and
+    recorded the error on both agents with `last_success_at` unchanged.
+  - After the fix and `uv tool install --force .`, `schedule install`
+    rewrote the units in place pointing at
+    `~/.local/share/uv/tools/fleet-usage/bin/fleet-usage` with
+    `Environment=PATH=/home/stebix/.bun/bin:...`; the development-checkout
+    executable is now refused with exit 2. (G5-11 changed-path procedure)
+  - `schedule uninstall --dry-run` printed the plan and left the timer
+    active. `systemctl --user start fleet-usage.service` ran the job under
+    systemd: exit 0, "uploaded 1, applied 1", ledger errors cleared.
+    (G5-03 minimal-environment execution)
+  - `doctor`: collector resolved from `~/.bun/bin`, `collector PATH` OK,
+    clock OK against the last published run.
+  - Quality gate: ruff, format, mypy clean; 730 tests.
+- QA criteria/gates: G5-03 and G5-11 checked. G5-01/02 remain on injected
+  runners for cron (this machine uses systemd; the real uninstall was not
+  executed because the timer stays in service). G5-04 needs the next
+  natural firings, expected hourly at :48 plus up to two minutes of
+  randomised delay; the first post-fix natural firing is due 18:48 CEST.
+  G5-05 through G5-08 need the Windows workstation. G5-09, G5-10, G5-12
+  open.
+- Environment: as HIST-004; systemd user manager, no linger enabled for
+  the user (the timer stops at logout until `loginctl enable-linger`).
+- Evidence: unit files under `~/.config/systemd/user/`, `systemd.log` and
+  `fleet-usage.log` under the state directory, remote ledger
+  `last_run_at` 15:50:04Z (failed) then 15:59:37Z (success).
+- Risks/limitations: the timer on this machine is live and publishes
+  hourly from now on; linger is not enabled.
+- Next step: observe two natural firings for G5-04 and G6-06; then the
+  servers (cron) and the Windows workstation.

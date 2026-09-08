@@ -123,7 +123,7 @@ Related implementation: IMP-501 through IMP-506.
 
 - [x] G5-01: Crontab installation preserves unrelated jobs and variables and repeated installation updates one managed block only; systemd installation writes one user timer/service pair with `OnCalendar` and `Persistent=true`.
 - [x] G5-02: Linux preview makes no scheduler changes for either backend; uninstall removes only the application's block or units and is safe when repeated; `auto` picks systemd only when a user manager is available.
-- [ ] G5-03: Verify paths containing spaces, quotes, Unicode, and cron-significant characters; scheduled execution succeeds with a minimal environment.
+- [x] G5-03: Verify paths containing spaces, quotes, Unicode, and cron-significant characters; scheduled execution succeeds with a minimal environment.
 - [ ] G5-04: Verify hourly scheduling, login catch-up via `--if-due`, restart, clock movement, and DST changes; repeat triggers never double count usage.
 - [ ] G5-05: On Windows, repeated registration creates one task with the correct principal, absolute executable, arguments, and config path.
 - [ ] G5-06: On Windows, logged-in mode publishes while the desktop is locked and resumes appropriately after a new login or missed start.
@@ -131,7 +131,7 @@ Related implementation: IMP-501 through IMP-506.
 - [ ] G5-08: Optional logged-out mode performs a real GitHub upload while the user is signed out; record whether S4U succeeded, and if password-backed logon is used, credentials are managed by Task Scheduler with no password leakage.
 - [ ] G5-09: Missing account rights, unavailable scheduler services, or unsupported modes produce clear diagnostics without partially enabling a broken schedule.
 - [ ] G5-10: Long-running collection does not overlap another instance; configured timeout and local logs make failures diagnosable.
-- [ ] G5-11: Package upgrade and changed installation paths have a tested repair/update procedure for existing schedules.
+- [x] G5-11: Package upgrade and changed installation paths have a tested repair/update procedure for existing schedules.
 - [ ] G5-12: Sleep/power-off behavior is documented accurately; wake-from-sleep is not enabled implicitly.
 - [ ] QA-G5: Exit gate passed; actual Unix and Windows task evidence recorded.
 

@@ -28,6 +28,19 @@ def _offline_github(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_unit_dir(tmp_path, monkeypatch):
+    """Keep the systemd unit lookup away from the real user session."""
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+
+
+def write_service_unit(tmp_path, text: str) -> None:
+    """Install a fake ``fleet-usage.service`` for the doctor to read."""
+    unit_dir = tmp_path / 'xdg' / 'systemd' / 'user'
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    (unit_dir / 'fleet-usage.service').write_text(text, encoding='utf-8')
+
+
 def published_ledger(last_run_at: dt.datetime) -> Ledger:
     """A ledger whose last run happened at ``last_run_at``."""
     return Ledger(
@@ -178,3 +191,81 @@ def test_doctor_is_happy_with_a_clock_that_is_ahead(
     assert result.exit_code == ExitCode.OK, result.output
     assert 'local clock is behind' not in result.output
     assert 'last published run' in result.output
+
+
+def flattened(output: str) -> str:
+    """Return the table text without the wrapping the console added."""
+    return ' '.join(output.replace('\u2502', ' ').split())
+
+
+def collector_at(monkeypatch, tmp_path, directory: str):
+    """Resolve the collector inside ``directory`` and answer --version."""
+    monkeypatch.setattr('shutil.which', lambda name: f'{directory}/{name}')
+
+    class Completed:
+        returncode = 0
+        stdout = 'ccusage 20.0.20\n'
+        stderr = ''
+
+    monkeypatch.setattr('subprocess.run', lambda *a, **k: Completed())
+
+
+def test_doctor_warns_when_the_collector_is_outside_the_system_dirs(
+    invoke, app_paths, monkeypatch, tmp_path
+):
+    invoke('init', '--repo', 'octo/data')
+    app_paths.env_file.write_text(
+        'FLEET_USAGE_GITHUB_TOKEN=token\n', encoding='utf-8'
+    )
+    collector_at(monkeypatch, tmp_path, '/home/tester/.bun/bin')
+
+    result = invoke('doctor')
+
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'collector PATH' in result.output
+    assert 'warn' in result.output
+    assert (
+        '/home/tester/.bun/bin is not on the PATH of a scheduled run'
+        in flattened(result.output)
+    )
+    assert "run 'fleet-usage schedule install'" in flattened(result.output)
+
+
+def test_doctor_is_quiet_about_a_collector_in_a_system_directory(
+    invoke, app_paths, monkeypatch, tmp_path
+):
+    invoke('init', '--repo', 'octo/data')
+    app_paths.env_file.write_text(
+        'FLEET_USAGE_GITHUB_TOKEN=token\n', encoding='utf-8'
+    )
+    collector_at(monkeypatch, tmp_path, '/usr/bin')
+
+    result = invoke('doctor')
+
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'collector PATH' not in result.output
+
+
+def test_doctor_accepts_a_schedule_that_carries_the_directory(
+    invoke, app_paths, monkeypatch, tmp_path
+):
+    invoke('init', '--repo', 'octo/data')
+    app_paths.env_file.write_text(
+        'FLEET_USAGE_GITHUB_TOKEN=token\n', encoding='utf-8'
+    )
+    collector_at(monkeypatch, tmp_path, '/home/tester/.bun/bin')
+    write_service_unit(
+        tmp_path,
+        '[Service]\n'
+        'Environment=PATH=/home/tester/.bun/bin:/usr/bin\n'
+        'ExecStart=/home/tester/.local/bin/fleet-usage publish\n',
+    )
+
+    result = invoke('doctor')
+
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'collector PATH' in result.output
+    assert 'the scheduled job carries /home/tester/.bun/bin' in flattened(
+        result.output
+    )
+    assert 'not on the PATH' not in flattened(result.output)

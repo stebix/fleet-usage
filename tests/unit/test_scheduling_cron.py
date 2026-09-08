@@ -9,6 +9,7 @@ from fleet_usage.scheduling.cron import (
     BEGIN_MARKER,
     END_MARKER,
     CronScheduler,
+    env_prefix,
     find_block,
     render_block,
     replace_block,
@@ -63,7 +64,7 @@ class FakeCrontab:
         return f'/usr/bin/{name}'
 
 
-def make_spec(tmp_path, interval=60, settings=None):
+def make_spec(tmp_path, interval=60, settings=None, extra_path_dirs=()):
     settings_path = settings or (tmp_path / 'settings.toml')
     return LaunchSpec(
         executable=Path('/opt/bin/fleet-usage'),
@@ -71,6 +72,7 @@ def make_spec(tmp_path, interval=60, settings=None):
         settings_path=Path(settings_path),
         interval_minutes=interval,
         log_dir=tmp_path / 'logs',
+        extra_path_dirs=tuple(extra_path_dirs),
     )
 
 
@@ -143,6 +145,56 @@ def test_block_without_end_marker_is_not_recognised():
     broken = f'{BEGIN_MARKER}\n7 * * * * /bin/true\n'
     assert find_block(broken) is None
     assert strip_block(broken) == broken
+
+
+# -------------------------------------------------------- collector PATH
+
+BUN_DIR = '/home/me/.bun/bin'
+BUN_PATH = 'env PATH=/home/me/.bun/bin:/usr/local/bin:/usr/bin:/bin'
+
+
+def job_command(block):
+    """Return the job line of ``block`` without its five time fields."""
+    return block.splitlines()[1].split(None, 5)[5]
+
+
+def test_no_env_prefix_without_extra_directories(tmp_path):
+    assert env_prefix(make_spec(tmp_path)) == ''
+    assert 'env PATH=' not in render_block(make_spec(tmp_path), OFFSET)
+
+
+def test_job_carries_the_collector_directory(tmp_path):
+    spec = make_spec(tmp_path, extra_path_dirs=(BUN_DIR,))
+    assert env_prefix(spec) == f'{BUN_PATH} '
+    command = job_command(render_block(spec, OFFSET))
+    assert command.startswith(f'{BUN_PATH} /opt/bin/fleet-usage ')
+    assert command.endswith(f'>> {tmp_path / "logs" / "cron.log"} 2>&1')
+
+
+def test_a_standard_directory_is_never_repeated(tmp_path):
+    spec = make_spec(tmp_path, extra_path_dirs=('/usr/bin',))
+    assert env_prefix(spec) == 'env PATH=/usr/bin:/usr/local/bin:/bin '
+
+
+def test_env_prefix_quotes_a_directory_with_a_space(tmp_path):
+    spec = make_spec(tmp_path, extra_path_dirs=('/home/me/my tools/bin',))
+    assert env_prefix(spec) == (
+        "env 'PATH=/home/me/my tools/bin:/usr/local/bin:/usr/bin:/bin' "
+    )
+
+
+def test_the_crontab_never_gets_a_bare_path_assignment(tmp_path):
+    fake = FakeCrontab(EXISTING)
+    scheduler = make_scheduler(tmp_path, fake, extra_path_dirs=(BUN_DIR,))
+    scheduler.install(60)
+    # A ``PATH=`` line in a crontab applies to every job below it, so the
+    # managed block must never add one: the only one is the foreign line.
+    assignments = [
+        line for line in fake.text.splitlines() if line.startswith('PATH=')
+    ]
+    assert assignments == ['PATH=/usr/local/bin:/usr/bin:/bin']
+    assert strip_block(fake.text) == EXISTING + '\n'
+    assert BUN_PATH in find_block(fake.text)
 
 
 # ------------------------------------------------------------- scheduler

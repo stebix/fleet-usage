@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from fleet_usage.scheduling.base import (
+    SYSTEMD_PATH_DIRS,
     LaunchSpec,
     Runner,
     Scheduler,
@@ -21,7 +22,9 @@ from fleet_usage.scheduling.base import (
     WhichCallable,
     default_which,
     oncalendar_expression,
+    path_value,
     subprocess_runner,
+    systemd_quote,
 )
 
 __all__ = [
@@ -29,6 +32,7 @@ __all__ = [
     'SERVICE_NAME',
     'TIMER_NAME',
     'SystemdScheduler',
+    'render_environment',
     'render_service',
     'render_timer',
     'unit_directory',
@@ -61,6 +65,32 @@ def unit_directory(env: Mapping[str, str] | None = None) -> Path:
     return root / 'systemd' / 'user'
 
 
+def render_environment(spec: LaunchSpec) -> str:
+    """Render the ``Environment=`` directives of the service.
+
+    The systemd user manager starts a service with a ``PATH`` of
+    ``/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin`` only, so a
+    collector installed under the home directory is invisible to it. The
+    directory resolved at install time is prepended, which keeps the
+    scheduled run equivalent to the interactive one.
+
+    Parameters
+    ----------
+    spec : LaunchSpec
+        The job to schedule.
+
+    Returns
+    -------
+    str
+        A ``PATH`` assignment line, or an empty string when the job
+        needs nothing beyond the default directories.
+    """
+    if not spec.extra_path_dirs:
+        return ''
+    value = path_value(spec.extra_path_dirs, SYSTEMD_PATH_DIRS)
+    return f'Environment={systemd_quote(f"PATH={value}")}\n'
+
+
 def render_service(spec: LaunchSpec) -> str:
     """Render the ``fleet-usage.service`` unit.
 
@@ -84,6 +114,7 @@ def render_service(spec: LaunchSpec) -> str:
         '\n'
         '[Service]\n'
         'Type=oneshot\n'
+        f'{render_environment(spec)}'
         f'ExecStart={spec.systemd_command()}\n'
         f'StandardOutput={append}\n'
         f'StandardError={append}\n'

@@ -26,8 +26,11 @@ from typing import Protocol
 
 __all__ = [
     'ALLOWED_INTERVALS',
+    'CRON_PATH_DIRS',
     'DAILY_HOUR',
     'EXECUTABLE_NAME',
+    'STANDARD_PATH_DIRS',
+    'SYSTEMD_PATH_DIRS',
     'LaunchSpec',
     'RunResult',
     'Runner',
@@ -36,11 +39,16 @@ __all__ = [
     'SchedulerError',
     'WhichCallable',
     'build_launch_spec',
+    'collector_path_dirs',
     'cron_expression',
     'cron_quote',
     'default_which',
+    'is_dev_checkout',
+    'is_standard_path_dir',
     'machine_minute_offset',
     'oncalendar_expression',
+    'path_value',
+    'resolve_collector',
     'resolve_executable',
     'select_backend',
     'subprocess_runner',
@@ -56,6 +64,25 @@ _MACHINE_ID_FILES = (
     Path('/var/lib/dbus/machine-id'),
 )
 _SHELL_SAFE = frozenset(string.ascii_letters + string.digits + '@%+=:,./-_')
+
+#: Directories every system scheduler already carries on its ``PATH``.
+STANDARD_PATH_DIRS = (
+    '/usr/local/sbin',
+    '/usr/local/bin',
+    '/usr/sbin',
+    '/usr/bin',
+    '/sbin',
+    '/bin',
+)
+#: ``PATH`` the systemd user manager hands to a service by default.
+SYSTEMD_PATH_DIRS = (
+    '/usr/local/sbin',
+    '/usr/local/bin',
+    '/usr/sbin',
+    '/usr/bin',
+)
+#: ``PATH`` a cron job runs with by default.
+CRON_PATH_DIRS = ('/usr/local/bin', '/usr/bin', '/bin')
 
 
 class SchedulerError(Exception):
@@ -410,6 +437,143 @@ def systemd_quote(value: str) -> str:
     return f'"{inner}"'
 
 
+def is_standard_path_dir(directory: str | Path) -> bool:
+    """Whether a scheduled job finds programs in ``directory`` anyway.
+
+    Parameters
+    ----------
+    directory : str or pathlib.Path
+        The directory a program was resolved from.
+
+    Returns
+    -------
+    bool
+        ``True`` when the directory is one of
+        :data:`STANDARD_PATH_DIRS`, which both cron and the systemd user
+        manager put on the ``PATH`` of every job they start.
+    """
+    text = str(directory).rstrip('/') or '/'
+    return text in STANDARD_PATH_DIRS
+
+
+def path_value(
+    extra_dirs: Sequence[str],
+    base_dirs: Sequence[str] = STANDARD_PATH_DIRS,
+) -> str:
+    """Render a ``PATH`` that begins with ``extra_dirs``.
+
+    Parameters
+    ----------
+    extra_dirs : sequence of str
+        Directories the job needs on top of the defaults, in priority
+        order.
+    base_dirs : sequence of str, optional
+        The ``PATH`` the scheduler provides on its own.
+
+    Returns
+    -------
+    str
+        A colon separated ``PATH``, without duplicates and with the
+        order of the inputs preserved.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in (*extra_dirs, *base_dirs):
+        entry = str(item)
+        if entry and entry not in seen:
+            seen.add(entry)
+            ordered.append(entry)
+    return ':'.join(ordered)
+
+
+def resolve_collector(
+    command: Sequence[str] | None,
+    *,
+    which: WhichCallable = default_which,
+) -> Path | None:
+    """Locate the collector program of ``command`` on the ``PATH``.
+
+    Parameters
+    ----------
+    command : sequence of str or None
+        The configured collector command; its first element is the
+        program.
+    which : callable, optional
+        ``PATH`` lookup, injected by the tests.
+
+    Returns
+    -------
+    pathlib.Path or None
+        Absolute path of the program, or ``None`` when the command is
+        empty or the program is not on the ``PATH``.
+    """
+    if not command:
+        return None
+    found = which(command[0])
+    if not found:
+        return None
+    return Path(found).expanduser().absolute()
+
+
+def collector_path_dirs(
+    command: Sequence[str] | None,
+    *,
+    which: WhichCallable = default_which,
+    force: bool = False,
+) -> tuple[str, ...]:
+    """Return the directories the scheduled job must add to its ``PATH``.
+
+    A scheduled run starts with the short ``PATH`` of the system
+    scheduler, not with the one of the shell that installed it. A
+    collector living in ``~/.bun/bin`` therefore works interactively and
+    fails silently every hour, which is exactly the failure this
+    function exists to prevent: the directory is resolved now, while the
+    interactive ``PATH`` is still available, and handed to the backend.
+
+    Parameters
+    ----------
+    command : sequence of str or None
+        The configured collector command.
+    which : callable, optional
+        ``PATH`` lookup, injected by the tests.
+    force : bool, optional
+        Install even when the collector cannot be resolved.
+
+    Returns
+    -------
+    tuple of str
+        The single directory the collector was resolved from, or an
+        empty tuple when it already lives in a standard directory, when
+        there is no collector, or when ``force`` waves an unresolvable
+        one through.
+
+    Raises
+    ------
+    SchedulerError
+        If the collector cannot be resolved and ``force`` is false.
+    """
+    if not command:
+        return ()
+    found = resolve_collector(command, which=which)
+    if found is None:
+        if force:
+            return ()
+        program = command[0]
+        msg = (
+            f'cannot resolve the collector program {program!r} on PATH\n'
+            'a scheduled run cannot resolve it either, so collection '
+            'would fail every time it fires\n'
+            'install the program, or put an absolute path into '
+            '[collector].command, then run this command again; '
+            'pass --force to install the schedule anyway'
+        )
+        raise SchedulerError(msg)
+    directory = found.parent
+    if is_standard_path_dir(directory):
+        return ()
+    return (str(directory),)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class LaunchSpec:
     """Everything a backend needs to describe the recurring job.
@@ -426,6 +590,10 @@ class LaunchSpec:
         How often the job should run.
     log_dir
         Directory the backend redirects the job output into.
+    extra_path_dirs
+        Directories the job needs on its ``PATH`` on top of the ones the
+        scheduler provides, in priority order. They hold the collector
+        when it lives outside :data:`STANDARD_PATH_DIRS`.
     """
 
     executable: Path
@@ -433,6 +601,7 @@ class LaunchSpec:
     settings_path: Path
     interval_minutes: int
     log_dir: Path
+    extra_path_dirs: tuple[str, ...] = ()
 
     @property
     def argv(self) -> tuple[str, ...]:
@@ -540,6 +709,31 @@ def _is_temporary(path: Path, roots: Sequence[Path]) -> bool:
     return any(path == root or root in path.parents for root in roots)
 
 
+def is_dev_checkout(path: Path) -> bool:
+    """Whether ``path`` is the console script of a development checkout.
+
+    ``uv sync`` writes ``<checkout>/.venv/bin/fleet-usage``. That file is
+    rebuilt whenever the environment is recreated and vanishes when the
+    checkout moves, so a schedule pointing at it breaks silently. Both
+    the marker directory and a ``pyproject.toml`` two levels above the
+    script identify such a layout.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        An absolute, resolved path.
+
+    Returns
+    -------
+    bool
+        ``True`` when the executable belongs to a checkout.
+    """
+    if '.venv' in path.parts:
+        return True
+    parents = path.parents
+    return len(parents) > 2 and (parents[2] / 'pyproject.toml').is_file()
+
+
 def resolve_executable(
     *,
     argv0: str | None = None,
@@ -547,6 +741,7 @@ def resolve_executable(
     which: WhichCallable = default_which,
     is_windows: bool | None = None,
     temp_roots: Sequence[Path] | None = None,
+    allow_dev_checkout: bool = False,
 ) -> Path:
     """Locate the installed ``fleet-usage`` executable.
 
@@ -569,6 +764,9 @@ def resolve_executable(
         Whether the target platform is Windows.
     temp_roots : sequence of pathlib.Path or None, optional
         Temporary roots to refuse, replacing the platform default.
+    allow_dev_checkout : bool, optional
+        Accept the console script of a development checkout instead of
+        refusing it.
 
     Returns
     -------
@@ -579,7 +777,8 @@ def resolve_executable(
     ------
     SchedulerError
         If no executable can be found, or the one found sits inside a
-        temporary directory and would disappear.
+        temporary directory or a development checkout and would not
+        survive.
     """
     windows = sys.platform == 'win32' if is_windows is None else is_windows
     names = _executable_names(windows)
@@ -615,6 +814,17 @@ def resolve_executable(
                 f"'uv tool install fleet-usage') and try again"
             )
             raise SchedulerError(msg)
+        if not allow_dev_checkout and is_dev_checkout(resolved):
+            msg = (
+                f'refusing to schedule {resolved}: it belongs to a '
+                'development checkout, so the job breaks as soon as the '
+                'virtual environment is rebuilt or the checkout moves\n'
+                "install a stable executable with 'uv tool install .' "
+                '(it writes fleet-usage into ~/.local/bin) and run '
+                'schedule install again, or pass --allow-dev-checkout '
+                'to schedule this one anyway'
+            )
+            raise SchedulerError(msg)
         return resolved
     msg = (
         f'cannot locate the {EXECUTABLE_NAME!r} executable\n'
@@ -636,6 +846,9 @@ def build_launch_spec(
     which: WhichCallable = default_which,
     is_windows: bool | None = None,
     temp_roots: Sequence[Path] | None = None,
+    allow_dev_checkout: bool = False,
+    collector_command: Sequence[str] | None = None,
+    force: bool = False,
 ) -> LaunchSpec:
     """Assemble the :class:`LaunchSpec` for this installation.
 
@@ -660,6 +873,13 @@ def build_launch_spec(
         Forwarded to :func:`resolve_executable`.
     temp_roots : sequence of pathlib.Path or None, optional
         Forwarded to :func:`resolve_executable`.
+    allow_dev_checkout : bool, optional
+        Forwarded to :func:`resolve_executable`.
+    collector_command : sequence of str or None, optional
+        The configured collector command, resolved here so that the job
+        can carry its directory on the ``PATH``.
+    force : bool, optional
+        Forwarded to :func:`collector_path_dirs`.
 
     Returns
     -------
@@ -669,7 +889,8 @@ def build_launch_spec(
     Raises
     ------
     SchedulerError
-        If the interval is unsupported or no executable is found.
+        If the interval is unsupported, no executable is found or the
+        collector cannot be resolved.
     """
     interval = validate_interval(interval_minutes)
     program = (
@@ -679,6 +900,7 @@ def build_launch_spec(
             which=which,
             is_windows=is_windows,
             temp_roots=temp_roots,
+            allow_dev_checkout=allow_dev_checkout,
         )
         if executable is None
         else executable
@@ -691,6 +913,11 @@ def build_launch_spec(
         settings_path=absolute_settings,
         interval_minutes=interval,
         log_dir=log_dir.expanduser().absolute(),
+        extra_path_dirs=collector_path_dirs(
+            collector_command,
+            which=which,
+            force=force,
+        ),
     )
 
 

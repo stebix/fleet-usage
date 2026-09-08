@@ -432,3 +432,192 @@ def test_subprocess_runner_captures_output():
     result = base.subprocess_runner(['cat'], stdin='hello')
     assert result.ok
     assert result.stdout == 'hello'
+
+
+# ------------------------------------------------------------ PATH helpers
+
+
+@pytest.mark.parametrize(
+    'directory',
+    ['/usr/bin', '/usr/local/bin', '/usr/sbin', '/bin', '/sbin', '/usr/bin/'],
+)
+def test_standard_path_directories(directory):
+    assert base.is_standard_path_dir(directory) is True
+
+
+@pytest.mark.parametrize(
+    'directory',
+    [
+        '/home/me/.bun/bin',
+        '/opt/tools/bin',
+        '/usr/bin/extra',
+        Path('/home/me/.local/bin'),
+    ],
+)
+def test_non_standard_path_directories(directory):
+    assert base.is_standard_path_dir(directory) is False
+
+
+def test_path_value_prepends_and_deduplicates():
+    value = base.path_value(
+        ('/home/me/.bun/bin', '/usr/bin'),
+        ('/usr/local/bin', '/usr/bin'),
+    )
+    assert value == '/home/me/.bun/bin:/usr/bin:/usr/local/bin'
+
+
+def test_path_value_defaults_to_the_standard_directories():
+    assert base.path_value(('/opt/bin',)).startswith(
+        '/opt/bin:/usr/local/sbin:'
+    )
+
+
+def test_collector_outside_the_standard_directories_is_carried():
+    dirs = base.collector_path_dirs(
+        ['bunx', 'ccusage@20.0.20'],
+        which=lambda name: f'/home/me/.bun/bin/{name}',
+    )
+    assert dirs == ('/home/me/.bun/bin',)
+
+
+def test_collector_in_a_standard_directory_adds_nothing():
+    dirs = base.collector_path_dirs(
+        ['ccusage'],
+        which=lambda name: f'/usr/bin/{name}',
+    )
+    assert dirs == ()
+
+
+def test_no_collector_command_adds_nothing():
+    assert base.collector_path_dirs(None, which=lambda name: None) == ()
+    assert base.collector_path_dirs([], which=lambda name: None) == ()
+
+
+def test_unresolvable_collector_is_refused():
+    with pytest.raises(SchedulerError) as excinfo:
+        base.collector_path_dirs(['bunx'], which=lambda name: None)
+    message = str(excinfo.value)
+    assert "'bunx'" in message
+    assert '--force' in message
+
+
+def test_force_waves_an_unresolvable_collector_through():
+    dirs = base.collector_path_dirs(
+        ['bunx'],
+        which=lambda name: None,
+        force=True,
+    )
+    assert dirs == ()
+
+
+def test_resolve_collector_reports_the_program():
+    found = base.resolve_collector(
+        ['bunx'], which=lambda name: '/home/me/.bun/bin/bunx'
+    )
+    assert found == Path('/home/me/.bun/bin/bunx')
+    assert base.resolve_collector(['bunx'], which=lambda name: None) is None
+    assert base.resolve_collector(None, which=lambda name: None) is None
+
+
+def test_build_launch_spec_carries_the_collector_directory(tmp_path):
+    program = tmp_path / 'fleet-usage'
+    program.write_text('')
+    spec = build_launch_spec(
+        settings_path=tmp_path / 'settings.toml',
+        log_dir=tmp_path / 'logs',
+        interval_minutes=60,
+        executable=program,
+        collector_command=['bunx', 'ccusage'],
+        which=lambda name: '/home/me/.bun/bin/bunx',
+    )
+    assert spec.extra_path_dirs == ('/home/me/.bun/bin',)
+
+
+def test_build_launch_spec_refuses_an_unresolvable_collector(tmp_path):
+    program = tmp_path / 'fleet-usage'
+    program.write_text('')
+    with pytest.raises(SchedulerError):
+        build_launch_spec(
+            settings_path=tmp_path / 'settings.toml',
+            log_dir=tmp_path / 'logs',
+            interval_minutes=60,
+            executable=program,
+            collector_command=['bunx'],
+            which=lambda name: None,
+        )
+
+
+def test_launch_spec_defaults_to_no_extra_path_dirs():
+    assert make_spec().extra_path_dirs == ()
+
+
+# --------------------------------------------------------- dev checkouts
+
+
+def dev_checkout(tmp_path):
+    """Create ``<checkout>/.venv/bin/fleet-usage`` and return it."""
+    checkout = tmp_path / 'checkout'
+    script = checkout / '.venv' / 'bin' / 'fleet-usage'
+    script.parent.mkdir(parents=True)
+    script.write_text('#!/bin/sh\n')
+    (checkout / 'pyproject.toml').write_text("[project]\nname = 'x'\n")
+    return script
+
+
+def test_dev_checkout_is_recognised(tmp_path):
+    script = dev_checkout(tmp_path)
+    assert base.is_dev_checkout(script) is True
+    # The marker directory alone is enough, without a pyproject.toml.
+    bare = tmp_path / 'elsewhere' / '.venv' / 'bin' / 'fleet-usage'
+    assert base.is_dev_checkout(bare) is True
+    # A sibling pyproject.toml two levels up is enough as well.
+    other = tmp_path / 'checkout' / 'env' / 'bin' / 'fleet-usage'
+    assert base.is_dev_checkout(other) is True
+
+
+def test_installed_executable_is_not_a_dev_checkout():
+    assert not base.is_dev_checkout(Path('/home/me/.local/bin/fleet-usage'))
+    assert not base.is_dev_checkout(Path('/usr/bin/fleet-usage'))
+
+
+def test_resolve_executable_refuses_a_dev_checkout(tmp_path):
+    script = dev_checkout(tmp_path)
+    with pytest.raises(SchedulerError) as excinfo:
+        resolve_executable(
+            exec_prefix=script.parent,
+            argv0='',
+            which=lambda name: None,
+            is_windows=False,
+            temp_roots=[],
+        )
+    message = str(excinfo.value)
+    assert 'development checkout' in message
+    assert 'uv tool install .' in message
+    assert '--allow-dev-checkout' in message
+
+
+def test_resolve_executable_accepts_a_dev_checkout_when_allowed(tmp_path):
+    script = dev_checkout(tmp_path)
+    found = resolve_executable(
+        exec_prefix=script.parent,
+        argv0='',
+        which=lambda name: None,
+        is_windows=False,
+        temp_roots=[],
+        allow_dev_checkout=True,
+    )
+    assert found == script.resolve()
+
+
+def test_a_temporary_directory_is_still_refused_first(tmp_path):
+    script = dev_checkout(tmp_path)
+    with pytest.raises(SchedulerError) as excinfo:
+        resolve_executable(
+            exec_prefix=script.parent,
+            argv0='',
+            which=lambda name: None,
+            is_windows=False,
+            temp_roots=[tmp_path],
+            allow_dev_checkout=True,
+        )
+    assert 'temporary directory' in str(excinfo.value)

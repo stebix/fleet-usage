@@ -18,6 +18,7 @@ from fleet_usage.scheduling.systemd import (
     SERVICE_NAME,
     TIMER_NAME,
     SystemdScheduler,
+    render_environment,
     render_service,
     render_timer,
     unit_directory,
@@ -27,7 +28,7 @@ OFFSET = 7
 AWKWARD = '/etc/fleet conf/set"tings 100%.toml'
 
 
-def make_spec(tmp_path, interval=60, settings=None):
+def make_spec(tmp_path, interval=60, settings=None, extra_path_dirs=()):
     settings_path = (
         settings if settings is not None else str(tmp_path / 'settings.toml')
     )
@@ -37,6 +38,7 @@ def make_spec(tmp_path, interval=60, settings=None):
         settings_path=Path(settings_path),
         interval_minutes=interval,
         log_dir=tmp_path / 'logs',
+        extra_path_dirs=tuple(extra_path_dirs),
     )
 
 
@@ -135,6 +137,53 @@ def test_timer_unit_contents(tmp_path):
 def test_timer_calendar_table(tmp_path, interval, calendar):
     text = render_timer(make_spec(tmp_path, interval=interval), OFFSET)
     assert f'OnCalendar={calendar}\n' in text
+
+
+# --------------------------------------------------------- collector PATH
+
+BUN_DIR = '/home/me/.bun/bin'
+BUN_PATH = (
+    'Environment=PATH=/home/me/.bun/bin:/usr/local/sbin:/usr/local/bin:'
+    '/usr/sbin:/usr/bin'
+)
+
+
+def test_no_environment_line_without_extra_directories(tmp_path):
+    assert render_environment(make_spec(tmp_path)) == ''
+    assert 'Environment=' not in render_service(make_spec(tmp_path))
+
+
+def test_service_unit_carries_the_collector_directory(tmp_path):
+    spec = make_spec(tmp_path, extra_path_dirs=(BUN_DIR,))
+    assert render_environment(spec) == f'{BUN_PATH}\n'
+    text = render_service(spec)
+    lines = text.splitlines()
+    assert BUN_PATH in lines
+    # The directive belongs to [Service] and precedes the command.
+    assert lines.index('[Service]') < lines.index(BUN_PATH)
+    assert lines.index(BUN_PATH) < lines.index(
+        next(line for line in lines if line.startswith('ExecStart='))
+    )
+
+
+def test_a_standard_directory_is_never_repeated(tmp_path):
+    spec = make_spec(tmp_path, extra_path_dirs=('/usr/bin',))
+    assert render_environment(spec) == (
+        'Environment=PATH=/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin\n'
+    )
+
+
+def test_environment_line_quotes_a_directory_with_a_space(tmp_path):
+    spec = make_spec(tmp_path, extra_path_dirs=('/home/me/my tools/bin',))
+    line = render_environment(spec).rstrip('\n')
+    assert line.startswith('Environment="PATH=/home/me/my tools/bin:')
+    assert line.endswith('/usr/bin"')
+
+
+def test_installed_unit_file_holds_the_environment_line(tmp_path):
+    scheduler = make_scheduler(tmp_path, extra_path_dirs=(BUN_DIR,))
+    scheduler.install(60)
+    assert BUN_PATH in scheduler.service_path.read_text()
 
 
 # ------------------------------------------------------------- lifecycle
@@ -341,7 +390,12 @@ def test_units_are_accepted_by_systemd(tmp_path):
     program.write_text('#!/bin/sh\nexit 0\n')
     program.chmod(0o755)
     spec = dataclasses.replace(
-        make_spec(tmp_path, interval=120, settings=AWKWARD),
+        make_spec(
+            tmp_path,
+            interval=120,
+            settings=AWKWARD,
+            extra_path_dirs=('/home/me/my tools/bin',),
+        ),
         executable=program,
     )
     units = tmp_path / 'units'

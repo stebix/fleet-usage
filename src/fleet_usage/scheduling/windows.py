@@ -37,6 +37,7 @@ __all__ = [
     'create_argv',
     'delete_argv',
     'fallback_create_argv',
+    'path_note',
     'query_argv',
     'render_task_xml',
     'schedule_flags',
@@ -333,6 +334,40 @@ def fallback_create_argv(
     return argv
 
 
+def path_note(spec: LaunchSpec, logon_mode: LogonMode) -> str | None:
+    """Return the ``PATH`` caveat of a non-interactive logon mode.
+
+    A task registered with an interactive token inherits the ``PATH`` of
+    the account that owns it, so nothing has to be carried along the way
+    the POSIX backends carry it. ``S4U`` and ``Password`` tasks start
+    outside a logon session, where only the system and user ``PATH`` from
+    the registry apply, and a collector installed by a per-user package
+    manager may be missing from both.
+
+    Parameters
+    ----------
+    spec : LaunchSpec
+        The job to schedule.
+    logon_mode : {'interactive', 's4u', 'password'}
+        How the task authenticates.
+
+    Returns
+    -------
+    str or None
+        A single line of advice, or ``None`` in interactive mode.
+    """
+    if logon_mode == 'interactive':
+        return None
+    where = ''
+    if spec.extra_path_dirs:
+        where = f'; here it resolved from {spec.extra_path_dirs[0]}'
+    return (
+        f'note: a task in {logon_mode} mode does not inherit an '
+        'interactive PATH, so the collector must be on the system or '
+        f'user PATH{where}'
+    )
+
+
 def query_argv(fmt: str = 'XML') -> list[str]:
     """Return the ``schtasks`` command that inspects the task.
 
@@ -513,10 +548,12 @@ class WindowsScheduler(Scheduler):
                 user=self.user,
                 logon_mode=self.logon_mode,
             )
+            note = path_note(spec, self.logon_mode)
+            suffix = f'{note}\n' if note is not None else ''
             return (
                 f'dry run: would register the task {TASK_NAME} with\n'
                 f'{" ".join(argv)}\n'
-                f'--- {TASK_NAME}.xml\n{document}'
+                f'--- {TASK_NAME}.xml\n{document}{suffix}'
             )
         spec.log_dir.mkdir(parents=True, exist_ok=True)
         xml_path = self._write_xml(document)
@@ -525,10 +562,12 @@ class WindowsScheduler(Scheduler):
             user=self.user,
             logon_mode=self.logon_mode,
         )
+        note = path_note(spec, self.logon_mode)
+        suffix = f'\n{note}' if note is not None else ''
         result = self.run(argv)
         if result.ok:
             xml_path.unlink(missing_ok=True)
-            return f'registered the scheduled task {TASK_NAME}'
+            return f'registered the scheduled task {TASK_NAME}{suffix}'
         fallback = fallback_create_argv(
             spec,
             self.offset,
@@ -541,7 +580,7 @@ class WindowsScheduler(Scheduler):
             return (
                 f'registered the scheduled task {TASK_NAME} without the '
                 'XML definition; missed runs will not be caught up\n'
-                f'(XML registration failed: {result.message()})'
+                f'(XML registration failed: {result.message()}){suffix}'
             )
         msg = (
             f'cannot register the scheduled task {TASK_NAME}: '

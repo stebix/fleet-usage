@@ -247,6 +247,7 @@ fleet-usage rebuild
 fleet-usage rebuild --machine MACHINE-ID
 fleet-usage schedule install
 fleet-usage schedule install --dry-run
+fleet-usage schedule install --force --allow-dev-checkout
 fleet-usage schedule status
 fleet-usage schedule uninstall
 ```
@@ -600,6 +601,13 @@ All backends:
 
 - Idempotent install/update, status, preview, and application-only removal.
 - Stable installed executable, independent of the development checkout and PATH.
+  `schedule install` refuses an executable inside a development checkout unless
+  `--allow-dev-checkout` is given, and recommends `uv tool install .`.
+- The scheduled job carries the collector's directory on PATH when it lies
+  outside the standard system directories (systemd `Environment=PATH=`, cron
+  `env PATH=` prefix), because user schedulers run with a minimal environment.
+  Install refuses an unresolvable collector unless `--force` is given; `doctor`
+  reports whether the installed unit carries the directory.
 - No duplicate instances, bounded runtime, and rotating diagnostics.
 - Scheduled execution under the account owning the logs and configuration.
 - Explicit reporting of unsupported backends or missing scheduler services.

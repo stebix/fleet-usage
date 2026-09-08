@@ -23,6 +23,7 @@ from fleet_usage.scheduling.base import (
     Scheduler,
     SchedulerError,
     build_launch_spec,
+    is_dev_checkout,
     select_backend,
     subprocess_runner,
 )
@@ -44,6 +45,13 @@ __all__ = [
     'status_command',
     'uninstall_command',
 ]
+
+DEV_CHECKOUT_WARNING = (
+    'warning: the scheduled command is the console script of a '
+    'development checkout; it stops working as soon as the virtual '
+    "environment is rebuilt or the checkout moves ('uv tool install .' "
+    'installs a stable one)'
+)
 
 #: Subprocess seam; the tests replace it with a recording fake.
 RUNNER: Runner = subprocess_runner
@@ -97,6 +105,20 @@ LogonModeOption = Annotated[
         help='Windows only: how the scheduled task authenticates.',
     ),
 ]
+ForceOption = Annotated[
+    bool,
+    typer.Option(
+        '--force',
+        help='Install even when the collector cannot be resolved on PATH.',
+    ),
+]
+AllowDevCheckoutOption = Annotated[
+    bool,
+    typer.Option(
+        '--allow-dev-checkout',
+        help='Allow scheduling the console script of a development checkout.',
+    ),
+]
 
 
 def _fail(exc: SchedulerError) -> None:
@@ -133,10 +155,25 @@ def _require_publisher(settings: Settings) -> None:
     exit_with(ExitCode.CONFIG_ERROR)
 
 
+def _warn_about_a_dev_checkout(spec: LaunchSpec) -> None:
+    """Print a warning when the job runs out of a development checkout.
+
+    Parameters
+    ----------
+    spec : LaunchSpec
+        The job description.
+    """
+    if is_dev_checkout(spec.executable):
+        out_console().print(DEV_CHECKOUT_WARNING, markup=False)
+
+
 def _launch_spec(
     ctx: typer.Context,
     settings: Settings,
     interval_minutes: int,
+    *,
+    force: bool = False,
+    allow_dev_checkout: bool = False,
 ) -> LaunchSpec:
     """Build the launch specification for this installation.
 
@@ -148,6 +185,10 @@ def _launch_spec(
         The loaded settings.
     interval_minutes : int
         Requested interval.
+    force : bool, optional
+        Install even when the collector cannot be resolved.
+    allow_dev_checkout : bool, optional
+        Accept the console script of a development checkout.
 
     Returns
     -------
@@ -157,12 +198,16 @@ def _launch_spec(
     settings_path = settings.source_path or config_path_of(ctx)
     if settings_path is None:  # pragma: no cover - defensive
         settings_path = get_paths().settings_file
+    collector = settings.collector
     try:
         return build_launch_spec(
             settings_path=settings_path,
             log_dir=get_paths().log_dir,
             interval_minutes=interval_minutes,
             executable=EXECUTABLE,
+            allow_dev_checkout=allow_dev_checkout,
+            collector_command=None if collector is None else collector.command,
+            force=force,
         )
     except SchedulerError as exc:
         _fail(exc)
@@ -228,6 +273,8 @@ def install_command(
     dry_run: DryRunOption = False,
     backend: BackendOption = Backend.AUTO,
     logon_mode: LogonModeOption = LogonMode.INTERACTIVE,
+    force: ForceOption = False,
+    allow_dev_checkout: AllowDevCheckoutOption = False,
 ) -> None:
     """Install the scheduled publish job.
 
@@ -243,11 +290,22 @@ def install_command(
         Scheduler backend.
     logon_mode : LogonMode, optional
         Windows only: how the scheduled task authenticates.
+    force : bool, optional
+        Install even when the collector cannot be resolved on the
+        ``PATH``.
+    allow_dev_checkout : bool, optional
+        Accept the console script of a development checkout.
     """
     settings = load_or_exit(ctx)
     _require_publisher(settings)
     minutes = _resolve_interval(settings, interval)
-    spec = _launch_spec(ctx, settings, minutes)
+    spec = _launch_spec(
+        ctx,
+        settings,
+        minutes,
+        force=force,
+        allow_dev_checkout=allow_dev_checkout,
+    )
     scheduler = _backend(backend, spec, logon_mode)
     console = out_console()
     try:
@@ -255,6 +313,7 @@ def install_command(
     except SchedulerError as exc:
         _fail(exc)
         return
+    _warn_about_a_dev_checkout(spec)
     console.print(report)
     if dry_run:
         return
@@ -286,6 +345,8 @@ def status_command(
             log_dir=get_paths().log_dir,
             interval_minutes=minutes,
             executable=EXECUTABLE,
+            allow_dev_checkout=True,
+            force=True,
         )
     except SchedulerError:
         # Status must work even where the executable cannot be located;
@@ -303,6 +364,7 @@ def status_command(
     except SchedulerError as exc:
         _fail(exc)
         return
+    _warn_about_a_dev_checkout(spec)
     out_console().print(status.render())
 
 

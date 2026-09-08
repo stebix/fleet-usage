@@ -73,6 +73,24 @@ class FakeCron:
         return RunResult(returncode=0)
 
 
+#: The collector of ``SETTINGS`` resolved inside a system directory.
+BUNX_ON_PATH = {'crontab': '/usr/bin/crontab', 'bunx': '/usr/bin/bunx'}
+#: The same collector installed by ``bun``, outside every system one.
+BUN_DIR = '/home/tester/.bun/bin'
+BUNX_IN_HOME = {'crontab': '/usr/bin/crontab', 'bunx': f'{BUN_DIR}/bunx'}
+#: No collector at all.
+NO_BUNX = {'crontab': '/usr/bin/crontab'}
+
+
+def which_map(table):
+    """Return a ``shutil.which`` replacement backed by ``table``."""
+
+    def which(name, *args, **kwargs):
+        return table.get(name)
+
+    return which
+
+
 @pytest.fixture
 def settings_file(tmp_path):
     path = tmp_path / 'settings.toml'
@@ -96,12 +114,7 @@ def fake_cron(tmp_path, monkeypatch):
     fake = FakeCron()
     monkeypatch.setattr(schedule_cmd, 'RUNNER', fake)
     monkeypatch.setattr(schedule_cmd, 'EXECUTABLE', program)
-    monkeypatch.setattr(
-        'shutil.which',
-        lambda name, *args, **kwargs: (
-            '/usr/bin/crontab' if name == 'crontab' else None
-        ),
-    )
+    monkeypatch.setattr('shutil.which', which_map(BUNX_ON_PATH))
     monkeypatch.delenv('XDG_RUNTIME_DIR', raising=False)
     monkeypatch.delenv('DBUS_SESSION_BUS_ADDRESS', raising=False)
     fake.program = program
@@ -377,7 +390,7 @@ def test_no_supported_backend(
     program.write_text('')
     monkeypatch.setattr(schedule_cmd, 'RUNNER', FakeCron())
     monkeypatch.setattr(schedule_cmd, 'EXECUTABLE', program)
-    monkeypatch.setattr('shutil.which', lambda name, *a, **k: None)
+    monkeypatch.setattr('shutil.which', which_map({'bunx': '/usr/bin/bunx'}))
     monkeypatch.delenv('XDG_RUNTIME_DIR', raising=False)
     monkeypatch.delenv('DBUS_SESSION_BUS_ADDRESS', raising=False)
     result = invoke(
@@ -420,6 +433,121 @@ def test_logon_mode_option_is_accepted(
         '--dry-run',
     )
     assert result.exit_code == ExitCode.OK, result.output
+
+
+# ------------------------------------------------- collector on the PATH
+
+
+def install(invoke, settings_file, *extra):
+    return invoke(
+        '--config',
+        str(settings_file),
+        'schedule',
+        'install',
+        '--backend',
+        'cron',
+        *extra,
+    )
+
+
+def test_the_job_carries_the_collector_directory(
+    invoke, app_paths, settings_file, fake_cron, monkeypatch
+):
+    monkeypatch.setattr('shutil.which', which_map(BUNX_IN_HOME))
+    result = install(invoke, settings_file)
+    assert result.exit_code == ExitCode.OK, result.output
+    job = find_block(fake_cron.text).splitlines()[1]
+    command = job.split(None, 5)[5]
+    assert command.startswith(
+        f'env PATH={BUN_DIR}:/usr/local/bin:/usr/bin:/bin '
+    )
+    # Never as a crontab assignment: that would apply to foreign jobs.
+    assert not any(
+        line.startswith('PATH=') for line in fake_cron.text.splitlines()
+    )
+
+
+def test_a_collector_in_a_system_directory_adds_nothing(
+    invoke, app_paths, settings_file, fake_cron
+):
+    result = install(invoke, settings_file)
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'env PATH=' not in fake_cron.text
+
+
+def test_an_unresolvable_collector_is_refused(
+    invoke, app_paths, settings_file, fake_cron, monkeypatch
+):
+    monkeypatch.setattr('shutil.which', which_map(NO_BUNX))
+    result = install(invoke, settings_file)
+    assert result.exit_code == ExitCode.CONFIG_ERROR, result.output
+    assert 'cannot resolve the collector program' in result.output
+    assert fake_cron.text is None
+
+
+def test_force_installs_despite_an_unresolvable_collector(
+    invoke, app_paths, settings_file, fake_cron, monkeypatch
+):
+    monkeypatch.setattr('shutil.which', which_map(NO_BUNX))
+    result = install(invoke, settings_file, '--force')
+    assert result.exit_code == ExitCode.OK, result.output
+    assert find_block(fake_cron.text) is not None
+    assert 'env PATH=' not in fake_cron.text
+
+
+# --------------------------------------------------- development checkouts
+
+
+@pytest.fixture
+def dev_checkout(tmp_path, monkeypatch):
+    """A console script inside ``<checkout>/.venv/bin``."""
+    checkout = tmp_path / 'checkout'
+    script = checkout / '.venv' / 'bin' / 'fleet-usage'
+    script.parent.mkdir(parents=True)
+    script.write_text('#!/bin/sh\n')
+    (checkout / 'pyproject.toml').write_text("[project]\nname = 'x'\n")
+    # tmp_path itself lives in the temporary directory, whose own refusal
+    # would otherwise mask the one under test.
+    monkeypatch.setattr('tempfile.gettempdir', lambda: str(tmp_path / 'tmp'))
+    monkeypatch.setattr('sys.executable', str(script.parent / 'python'))
+    return script
+
+
+def test_a_development_checkout_is_refused(
+    invoke, app_paths, settings_file, fake_cron, dev_checkout, monkeypatch
+):
+    monkeypatch.setattr(schedule_cmd, 'EXECUTABLE', None)
+    result = install(invoke, settings_file)
+    assert result.exit_code == ExitCode.CONFIG_ERROR, result.output
+    assert 'development checkout' in result.output
+    assert 'uv tool install .' in result.output
+    assert fake_cron.text is None
+
+
+def test_allow_dev_checkout_installs_with_a_warning(
+    invoke, app_paths, settings_file, fake_cron, dev_checkout, monkeypatch
+):
+    monkeypatch.setattr(schedule_cmd, 'EXECUTABLE', None)
+    result = install(invoke, settings_file, '--allow-dev-checkout')
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'development checkout' in result.output
+    assert str(dev_checkout) in fake_cron.text
+
+
+def test_status_warns_about_a_development_checkout(
+    invoke, app_paths, settings_file, fake_cron, dev_checkout, monkeypatch
+):
+    monkeypatch.setattr(schedule_cmd, 'EXECUTABLE', dev_checkout)
+    result = invoke(
+        '--config',
+        str(settings_file),
+        'schedule',
+        'status',
+        '--backend',
+        'cron',
+    )
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'development checkout' in result.output
 
 
 HELP_TARGETS = [

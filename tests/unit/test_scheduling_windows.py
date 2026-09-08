@@ -17,6 +17,7 @@ from fleet_usage.scheduling.windows import (
     create_argv,
     delete_argv,
     fallback_create_argv,
+    path_note,
     query_argv,
     render_task_xml,
     schedule_flags,
@@ -28,13 +29,16 @@ EXE = Path(r'C:\Users\me\AppData\Roaming\uv\tools\fleet-usage.exe')
 SETTINGS = r'C:\Users\me\AppData\Roaming\fleet-usage\settings.toml'
 
 
-def make_spec(interval=60, settings=SETTINGS, log_dir=None):
+def make_spec(
+    interval=60, settings=SETTINGS, log_dir=None, extra_path_dirs=()
+):
     return LaunchSpec(
         executable=EXE,
         args=('--config', settings, 'publish', '--if-due'),
         settings_path=Path(settings),
         interval_minutes=interval,
         log_dir=log_dir or Path(r'C:\Users\me\logs'),
+        extra_path_dirs=tuple(extra_path_dirs),
     )
 
 
@@ -424,3 +428,60 @@ def test_uninstall_dry_run(tmp_path):
     scheduler, fake = make_scheduler(tmp_path)
     assert scheduler.uninstall(dry_run=True).startswith('dry run:')
     assert fake.calls == []
+
+
+# --------------------------------------------------------- collector PATH
+
+BUN_DIR = r'C:\Users\me\.bun\bin'
+
+
+def path_scheduler(tmp_path, logon_mode, fake=None):
+    """A scheduler whose collector lives outside the system directories."""
+    fake = fake or FakeSchtasks()
+    scheduler = WindowsScheduler(
+        make_spec(extra_path_dirs=(BUN_DIR,)),
+        platform='win32',
+        user='CORP\\me',
+        logon_mode=logon_mode,
+        xml_dir=tmp_path / 'xml',
+        runner=fake,
+        which=fake.which,
+        minute_offset=OFFSET,
+    )
+    return scheduler, fake
+
+
+def test_an_interactive_task_needs_no_path_note():
+    assert path_note(make_spec(extra_path_dirs=(BUN_DIR,)), 'interactive') is (
+        None
+    )
+
+
+@pytest.mark.parametrize('mode', ['s4u', 'password'])
+def test_a_non_interactive_task_notes_the_path(mode):
+    note = path_note(make_spec(extra_path_dirs=(BUN_DIR,)), mode)
+    assert 'system or user PATH' in note
+    assert BUN_DIR in note
+
+
+def test_the_preview_carries_the_note(tmp_path):
+    scheduler, _ = path_scheduler(tmp_path, 's4u')
+    report = scheduler.install(60, dry_run=True)
+    assert 'system or user PATH' in report
+    assert BUN_DIR in report
+
+
+def test_the_installation_report_carries_the_note(tmp_path):
+    scheduler, _ = path_scheduler(tmp_path, 'password')
+    assert 'system or user PATH' in scheduler.install(60)
+
+
+def test_an_interactive_installation_stays_silent(tmp_path):
+    scheduler, _ = path_scheduler(tmp_path, 'interactive')
+    assert 'system or user PATH' not in scheduler.install(60, dry_run=True)
+
+
+def test_the_task_definition_never_sets_a_path(tmp_path):
+    scheduler, _ = path_scheduler(tmp_path, 's4u')
+    document = scheduler.task_xml(60)
+    assert 'PATH' not in document

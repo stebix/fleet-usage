@@ -8,18 +8,21 @@ including a missing trailing newline on the last foreign line.
 """
 
 from fleet_usage.scheduling.base import (
+    CRON_PATH_DIRS,
     LaunchSpec,
     Scheduler,
     SchedulerError,
     ScheduleStatus,
     cron_expression,
     cron_quote,
+    path_value,
 )
 
 __all__ = [
     'BEGIN_MARKER',
     'END_MARKER',
     'CronScheduler',
+    'env_prefix',
     'find_block',
     'render_block',
     'replace_block',
@@ -146,6 +149,34 @@ def replace_block(text: str, block: str) -> str:
     return prefix + block
 
 
+def env_prefix(spec: LaunchSpec) -> str:
+    """Render the ``env`` prefix that widens the ``PATH`` of the job.
+
+    cron starts a job with a ``PATH`` of ``/usr/bin:/bin``, so a
+    collector installed under the home directory is invisible to it. The
+    directory is prepended through an explicit ``env`` invocation rather
+    than through a ``PATH=`` line in the crontab: such a line applies to
+    every job below it in the file, and this backend must not change how
+    foreign jobs run.
+
+    Parameters
+    ----------
+    spec : LaunchSpec
+        The job to schedule.
+
+    Returns
+    -------
+    str
+        ``'env PATH=... '`` including the trailing space, or an empty
+        string when the job needs nothing beyond the default
+        directories.
+    """
+    if not spec.extra_path_dirs:
+        return ''
+    value = path_value(spec.extra_path_dirs, CRON_PATH_DIRS)
+    return f'env {cron_quote(f"PATH={value}")} '
+
+
 def render_block(spec: LaunchSpec, offset: int) -> str:
     """Render the managed crontab block for ``spec``.
 
@@ -169,7 +200,8 @@ def render_block(spec: LaunchSpec, offset: int) -> str:
     """
     expression = cron_expression(spec.interval_minutes, offset)
     log_file = cron_quote(str(spec.log_dir / LOG_NAME))
-    job = f'{expression} {spec.shell_command()} >> {log_file} 2>&1'
+    command = f'{env_prefix(spec)}{spec.shell_command()}'
+    job = f'{expression} {command} >> {log_file} 2>&1'
     return f'{BEGIN_MARKER}\n{job}\n{END_MARKER}\n'
 
 

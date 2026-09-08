@@ -23,6 +23,8 @@ from fleet_usage.fetch import FileSource, build_client, ledger_remote_path
 from fleet_usage.github import GitHubError, NotFoundError, check_access
 from fleet_usage.models import Ledger
 from fleet_usage.paths import AppPaths, get_paths
+from fleet_usage.scheduling.base import is_standard_path_dir
+from fleet_usage.scheduling.systemd import SERVICE_NAME, unit_directory
 from fleet_usage.ui import out_console, print_error
 
 __all__ = [
@@ -137,6 +139,58 @@ def _collector_version(command: list[str]) -> tuple[bool, str]:
     return True, lines[-1]
 
 
+def _installed_service_text() -> str | None:
+    """Return the text of the installed systemd service unit.
+
+    Returns
+    -------
+    str or None
+        The unit file contents, or ``None`` when no user unit was
+        written. Reading one file is cheap enough for a diagnostic;
+        interrogating every backend is not.
+    """
+    try:
+        return (unit_directory() / SERVICE_NAME).read_text(encoding='utf-8')
+    except OSError:
+        return None
+
+
+def _check_collector_path(executable: Path) -> Check | None:
+    """Check that a scheduled run would also find the collector.
+
+    A scheduler starts its jobs with a short ``PATH``
+    (:data:`~fleet_usage.scheduling.base.STANDARD_PATH_DIRS`), so a
+    collector installed under the home directory works interactively and
+    is invisible to the timer. ``schedule install`` writes the directory
+    into the job; this check reports when it did not.
+
+    Parameters
+    ----------
+    executable : pathlib.Path
+        The resolved collector program.
+
+    Returns
+    -------
+    Check or None
+        ``None`` when the collector lives in a standard directory and
+        nothing has to be carried, otherwise a check describing whether
+        the installed job carries its directory.
+    """
+    directory = executable.parent
+    if is_standard_path_dir(directory):
+        return None
+    name = 'collector PATH'
+    unit = _installed_service_text()
+    if unit is not None and str(directory) in unit:
+        return Check(name, OK, f'the scheduled job carries {directory}')
+    return Check(
+        name,
+        WARN,
+        f'{directory} is not on the PATH of a scheduled run; run '
+        "'fleet-usage schedule install' so the job carries it",
+    )
+
+
 def _check_collector(settings: Settings) -> list[Check]:
     """Verify that the configured collector can be executed.
 
@@ -148,8 +202,9 @@ def _check_collector(settings: Settings) -> list[Check]:
     Returns
     -------
     list of Check
-        Resolution of the executable and, if it resolves, the version
-        it reports compared against the configured one.
+        Resolution of the executable, the directory it was resolved
+        from and, if it resolves, the version it reports compared
+        against the configured one.
     """
     collector = settings.collector
     if collector is None:
@@ -163,7 +218,11 @@ def _check_collector(settings: Settings) -> list[Check]:
                 f'{collector.command[0]!r} not found on PATH',
             )
         ]
-    checks = [Check('collector', OK, executable)]
+    program = Path(executable)
+    checks = [Check('collector', OK, f'{program} (from {program.parent})')]
+    path_check = _check_collector_path(program)
+    if path_check is not None:
+        checks.append(path_check)
     succeeded, reported = _collector_version(collector.command)
     if not succeeded:
         checks.append(Check('collector version', FAIL, reported))
