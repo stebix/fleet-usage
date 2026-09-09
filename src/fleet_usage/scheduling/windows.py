@@ -12,6 +12,7 @@ import dataclasses
 import getpass
 import os
 import re
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -366,15 +367,15 @@ def registry_path_value(hive: str, subkey: str) -> str | None:
         The raw, still unexpanded value, or ``None`` off Windows and
         whenever the key or value is missing.
     """
-    try:
+    value: object = None
+    if sys.platform == 'win32':  # pragma: no cover - Windows only
         import winreg
-    except ImportError:  # pragma: no cover - Windows only
-        return None
-    try:
-        with winreg.OpenKey(getattr(winreg, hive), subkey) as key:
-            value, _ = winreg.QueryValueEx(key, 'Path')
-    except OSError:
-        return None
+
+        try:
+            with winreg.OpenKey(getattr(winreg, hive), subkey) as key:
+                value = winreg.QueryValueEx(key, 'Path')[0]
+        except OSError:
+            return None
     return value if isinstance(value, str) else None
 
 

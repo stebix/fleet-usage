@@ -188,16 +188,54 @@ def _check_collector_path(executable: Path) -> Check | None:
         return None
     name = 'collector PATH'
     if sys.platform == 'win32':
-        if inherits_directory(directory):
-            return Check(name, OK, f'a scheduled task inherits {directory}')
-        return Check(
-            name,
-            WARN,
-            f'{directory} is on the PATH of this shell only, so a '
-            'scheduled task cannot find the collector; add it to the '
-            'PATH of your account under "Edit environment variables '
-            'for your account"',
-        )
+        check = _inherited_path_check(name, directory)
+    else:
+        check = _carried_path_check(name, directory)
+    return check
+
+
+def _inherited_path_check(name: str, directory: Path) -> Check:
+    """Judge a directory against the ``PATH`` a Windows task inherits.
+
+    Parameters
+    ----------
+    name : str
+        Name the check is reported under.
+    directory : pathlib.Path
+        Directory the collector was resolved from.
+
+    Returns
+    -------
+    Check
+        Whether the registry persists the directory for a scheduled run.
+    """
+    if inherits_directory(directory):
+        return Check(name, OK, f'a scheduled task inherits {directory}')
+    return Check(
+        name,
+        WARN,
+        f'{directory} is on the PATH of this shell only, so a '
+        'scheduled task cannot find the collector; add it to the '
+        'PATH of your account under "Edit environment variables '
+        'for your account"',
+    )
+
+
+def _carried_path_check(name: str, directory: Path) -> Check:
+    """Judge a directory against the ``PATH`` a POSIX job carries.
+
+    Parameters
+    ----------
+    name : str
+        Name the check is reported under.
+    directory : pathlib.Path
+        Directory the collector was resolved from.
+
+    Returns
+    -------
+    Check
+        Whether the installed unit carries the directory.
+    """
     unit = _installed_service_text()
     if unit is not None and str(directory) in unit:
         return Check(name, OK, f'the scheduled job carries {directory}')
