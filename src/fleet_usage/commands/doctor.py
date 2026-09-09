@@ -4,6 +4,7 @@ import dataclasses
 import datetime as dt
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from fleet_usage.models import Ledger
 from fleet_usage.paths import AppPaths, get_paths
 from fleet_usage.scheduling.base import is_standard_path_dir
 from fleet_usage.scheduling.systemd import SERVICE_NAME, unit_directory
+from fleet_usage.scheduling.windows import inherits_directory
 from fleet_usage.ui import out_console, print_error
 
 __all__ = [
@@ -158,11 +160,16 @@ def _installed_service_text() -> str | None:
 def _check_collector_path(executable: Path) -> Check | None:
     """Check that a scheduled run would also find the collector.
 
-    A scheduler starts its jobs with a short ``PATH``
+    A POSIX scheduler starts its jobs with a short ``PATH``
     (:data:`~fleet_usage.scheduling.base.STANDARD_PATH_DIRS`), so a
     collector installed under the home directory works interactively and
     is invisible to the timer. ``schedule install`` writes the directory
     into the job; this check reports when it did not.
+
+    Windows carries nothing, because there is nothing to carry: a task
+    inherits the ``PATH`` the registry persists for the machine and the
+    account. The question there is whether the collector directory is on
+    that ``PATH``, and no reinstall of the job can change the answer.
 
     Parameters
     ----------
@@ -174,12 +181,23 @@ def _check_collector_path(executable: Path) -> Check | None:
     Check or None
         ``None`` when the collector lives in a standard directory and
         nothing has to be carried, otherwise a check describing whether
-        the installed job carries its directory.
+        a scheduled run would find it.
     """
     directory = executable.parent
     if is_standard_path_dir(directory):
         return None
     name = 'collector PATH'
+    if sys.platform == 'win32':
+        if inherits_directory(directory):
+            return Check(name, OK, f'a scheduled task inherits {directory}')
+        return Check(
+            name,
+            WARN,
+            f'{directory} is on the PATH of this shell only, so a '
+            'scheduled task cannot find the collector; add it to the '
+            'PATH of your account under "Edit environment variables '
+            'for your account"',
+        )
     unit = _installed_service_text()
     if unit is not None and str(directory) in unit:
         return Check(name, OK, f'the scheduled job carries {directory}')

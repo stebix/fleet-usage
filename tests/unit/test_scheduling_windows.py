@@ -17,6 +17,8 @@ from fleet_usage.scheduling.windows import (
     create_argv,
     delete_argv,
     fallback_create_argv,
+    inherited_path_dirs,
+    inherits_directory,
     path_note,
     query_argv,
     render_task_xml,
@@ -486,3 +488,47 @@ def test_the_task_definition_never_sets_a_path(tmp_path):
     scheduler, _ = path_scheduler(tmp_path, 's4u')
     document = scheduler.task_xml(60)
     assert 'PATH' not in document
+
+
+# ------------------------------------------------------ inherited PATH
+
+
+def registry(machine='', user=''):
+    """Return a reader standing in for the two persisted Path values."""
+    values = {'HKEY_LOCAL_MACHINE': machine, 'HKEY_CURRENT_USER': user}
+    return lambda hive, subkey: values.get(hive)
+
+
+def test_inherited_path_dirs_reads_machine_before_user():
+    dirs = inherited_path_dirs(
+        registry(machine=r'C:\Windows;C:\Windows\System32', user=BUN_DIR)
+    )
+    assert dirs == (
+        Path(r'C:\Windows'),
+        Path(r'C:\Windows\System32'),
+        Path(BUN_DIR),
+    )
+
+
+def test_inherited_path_dirs_expands_and_cleans_entries(monkeypatch):
+    monkeypatch.setenv('FLEET_USAGE_TEST_ROOT', r'C:\opt')
+    dirs = inherited_path_dirs(
+        registry(user=f'  "{BUN_DIR}" ;;%FLEET_USAGE_TEST_ROOT%')
+    )
+    assert dirs == (Path(BUN_DIR), Path(r'C:\opt'))
+
+
+def test_inherited_path_dirs_without_any_value():
+    assert inherited_path_dirs(lambda hive, subkey: None) == ()
+
+
+def test_a_task_inherits_a_directory_on_the_persisted_path():
+    assert inherits_directory(BUN_DIR, registry(user=BUN_DIR))
+
+
+def test_the_comparison_ignores_case_and_trailing_separators():
+    assert inherits_directory(BUN_DIR.upper() + '\\', registry(user=BUN_DIR))
+
+
+def test_a_directory_missing_from_the_persisted_path():
+    assert not inherits_directory(BUN_DIR, registry(machine=r'C:\Windows'))

@@ -2,6 +2,7 @@
 
 import datetime as dt
 import os
+import sys
 
 import pytest
 
@@ -278,3 +279,50 @@ def test_doctor_accepts_a_schedule_that_carries_the_directory(
         result.output
     )
     assert 'not on the PATH' not in flattened(result.output)
+
+
+def on_windows(monkeypatch, *, inherited: bool):
+    """Pretend to run on Windows with a known persisted PATH."""
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    monkeypatch.setattr(
+        'fleet_usage.commands.doctor.inherits_directory',
+        lambda directory: inherited,
+    )
+
+
+def test_doctor_accepts_a_collector_a_windows_task_inherits(
+    invoke, app_paths, monkeypatch, tmp_path
+):
+    invoke('init', '--repo', 'octo/data')
+    app_paths.env_file.write_text(
+        'FLEET_USAGE_GITHUB_TOKEN=token\n', encoding='utf-8'
+    )
+    collector_at(monkeypatch, tmp_path, r'C:\Users\tester\.bun\bin')
+    on_windows(monkeypatch, inherited=True)
+
+    result = invoke('doctor')
+
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'collector PATH' in result.output
+    assert 'a scheduled task inherits' in flattened(result.output)
+    assert 'warn' not in result.output
+
+
+def test_doctor_warns_when_a_windows_task_would_not_find_the_collector(
+    invoke, app_paths, monkeypatch, tmp_path
+):
+    invoke('init', '--repo', 'octo/data')
+    app_paths.env_file.write_text(
+        'FLEET_USAGE_GITHUB_TOKEN=token\n', encoding='utf-8'
+    )
+    collector_at(monkeypatch, tmp_path, r'C:\Users\tester\.bun\bin')
+    on_windows(monkeypatch, inherited=False)
+
+    result = invoke('doctor')
+
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'warn' in result.output
+    assert 'on the PATH of this shell only' in flattened(result.output)
+    # Reinstalling the job cannot carry a directory on Windows, so the
+    # POSIX advice must not be offered there.
+    assert "run 'fleet-usage schedule install'" not in flattened(result.output)

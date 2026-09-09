@@ -13,6 +13,7 @@ import getpass
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 from xml.sax.saxutils import escape
@@ -37,6 +38,8 @@ __all__ = [
     'create_argv',
     'delete_argv',
     'fallback_create_argv',
+    'inherited_path_dirs',
+    'inherits_directory',
     'path_note',
     'query_argv',
     'render_task_xml',
@@ -50,7 +53,19 @@ REPETITION_DURATION = 'P1D'
 DAILY_HOUR = 3
 _START_DATE = '2000-01-01'
 
+#: Where Windows keeps the ``PATH`` a process started outside a shell
+#: inherits: the machine value first, then the per user value.
+REGISTRY_PATH_KEYS: tuple[tuple[str, str], ...] = (
+    (
+        'HKEY_LOCAL_MACHINE',
+        r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+    ),
+    ('HKEY_CURRENT_USER', 'Environment'),
+)
+
 LogonMode = Literal['interactive', 's4u', 'password']
+#: Reads one persisted ``Path`` value, given a hive and a subkey.
+RegistryReader = Callable[[str, str], str | None]
 _LOGON_TYPES: dict[str, str] = {
     'interactive': 'InteractiveToken',
     's4u': 'S4U',
@@ -332,6 +347,95 @@ def fallback_create_argv(
     else:
         argv.extend(['/RU', user, '/IT'])
     return argv
+
+
+def registry_path_value(hive: str, subkey: str) -> str | None:
+    """Read one persisted ``Path`` value from the Windows registry.
+
+    Parameters
+    ----------
+    hive : str
+        Name of a :mod:`winreg` root key, for example
+        ``'HKEY_CURRENT_USER'``.
+    subkey : str
+        Key holding the environment values.
+
+    Returns
+    -------
+    str or None
+        The raw, still unexpanded value, or ``None`` off Windows and
+        whenever the key or value is missing.
+    """
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - Windows only
+        return None
+    try:
+        with winreg.OpenKey(getattr(winreg, hive), subkey) as key:
+            value, _ = winreg.QueryValueEx(key, 'Path')
+    except OSError:
+        return None
+    return value if isinstance(value, str) else None
+
+
+def inherited_path_dirs(
+    read: RegistryReader = registry_path_value,
+) -> tuple[Path, ...]:
+    """Return the ``PATH`` a scheduled task starts with.
+
+    The Task Scheduler does not run the job from a shell, so the job
+    never sees a ``PATH`` assembled by a profile script: it gets the
+    machine and user values the registry persists. A collector installed
+    by a per user package manager is on that ``PATH`` only if its
+    installer wrote the directory there.
+
+    Parameters
+    ----------
+    read : callable, optional
+        Registry reader taking a hive and a subkey, injected by the
+        tests.
+
+    Returns
+    -------
+    tuple of pathlib.Path
+        The directories, machine values first, with the environment
+        references Windows allows in them expanded.
+    """
+    dirs: list[Path] = []
+    for hive, subkey in REGISTRY_PATH_KEYS:
+        value = read(hive, subkey)
+        if not value:
+            continue
+        for entry in value.split(os.pathsep):
+            expanded = os.path.expandvars(entry.strip().strip('"'))
+            if expanded:
+                dirs.append(Path(expanded))
+    return tuple(dirs)
+
+
+def inherits_directory(
+    directory: Path | str,
+    read: RegistryReader = registry_path_value,
+) -> bool:
+    """Whether a scheduled task would find a program in ``directory``.
+
+    Parameters
+    ----------
+    directory : pathlib.Path or str
+        Directory holding the program.
+    read : callable, optional
+        Registry reader, injected by the tests.
+
+    Returns
+    -------
+    bool
+        ``True`` when the directory is on the persisted ``PATH``.
+    """
+    wanted = os.path.normcase(os.path.normpath(str(directory)))
+    return any(
+        os.path.normcase(os.path.normpath(str(entry))) == wanted
+        for entry in inherited_path_dirs(read)
+    )
 
 
 def path_note(spec: LaunchSpec, logon_mode: LogonMode) -> str | None:
