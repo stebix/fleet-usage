@@ -5,7 +5,7 @@ runner that records the argument vector, which is exactly what has to be
 right on the machine that does run it.
 """
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from xml.etree import ElementTree
 
 import pytest
@@ -504,9 +504,9 @@ def test_inherited_path_dirs_reads_machine_before_user():
         registry(machine=r'C:\Windows;C:\Windows\System32', user=BUN_DIR)
     )
     assert dirs == (
-        Path(r'C:\Windows'),
-        Path(r'C:\Windows\System32'),
-        Path(BUN_DIR),
+        PureWindowsPath(r'C:\Windows'),
+        PureWindowsPath(r'C:\Windows\System32'),
+        PureWindowsPath(BUN_DIR),
     )
 
 
@@ -515,7 +515,10 @@ def test_inherited_path_dirs_expands_and_cleans_entries(monkeypatch):
     dirs = inherited_path_dirs(
         registry(user=f'  "{BUN_DIR}" ;;%FLEET_USAGE_TEST_ROOT%')
     )
-    assert dirs == (Path(BUN_DIR), Path(r'C:\opt'))
+    assert dirs == (
+        PureWindowsPath(BUN_DIR),
+        PureWindowsPath(r'C:\opt'),
+    )
 
 
 def test_inherited_path_dirs_without_any_value():

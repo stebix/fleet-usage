@@ -10,12 +10,13 @@ definition and the flag form is kept only as a fallback.
 
 import dataclasses
 import getpass
+import ntpath
 import os
 import re
 import sys
 import tempfile
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Literal
 from xml.sax.saxutils import escape
 
@@ -53,6 +54,10 @@ EXECUTION_TIME_LIMIT = 'PT30M'
 REPETITION_DURATION = 'P1D'
 DAILY_HOUR = 3
 _START_DATE = '2000-01-01'
+
+#: What separates the entries of a persisted ``PATH``, whatever the
+#: host running this code uses for its own.
+REGISTRY_PATH_SEPARATOR = ';'
 
 #: Where Windows keeps the ``PATH`` a process started outside a shell
 #: inherits: the machine value first, then the per user value.
@@ -381,7 +386,7 @@ def registry_path_value(hive: str, subkey: str) -> str | None:
 
 def inherited_path_dirs(
     read: RegistryReader = registry_path_value,
-) -> tuple[Path, ...]:
+) -> tuple[PureWindowsPath, ...]:
     """Return the ``PATH`` a scheduled task starts with.
 
     The Task Scheduler does not run the job from a shell, so the job
@@ -398,19 +403,21 @@ def inherited_path_dirs(
 
     Returns
     -------
-    tuple of pathlib.Path
+    tuple of pathlib.PureWindowsPath
         The directories, machine values first, with the environment
-        references Windows allows in them expanded.
+        references Windows allows in them expanded. The value is read
+        with Windows rules -- semicolon separated, backslashes -- on
+        whatever host the test suite happens to run on.
     """
-    dirs: list[Path] = []
+    dirs: list[PureWindowsPath] = []
     for hive, subkey in REGISTRY_PATH_KEYS:
         value = read(hive, subkey)
         if not value:
             continue
-        for entry in value.split(os.pathsep):
-            expanded = os.path.expandvars(entry.strip().strip('"'))
+        for entry in value.split(REGISTRY_PATH_SEPARATOR):
+            expanded = ntpath.expandvars(entry.strip().strip('"'))
             if expanded:
-                dirs.append(Path(expanded))
+                dirs.append(PureWindowsPath(ntpath.normpath(expanded)))
     return tuple(dirs)
 
 
@@ -432,11 +439,8 @@ def inherits_directory(
     bool
         ``True`` when the directory is on the persisted ``PATH``.
     """
-    wanted = os.path.normcase(os.path.normpath(str(directory)))
-    return any(
-        os.path.normcase(os.path.normpath(str(entry))) == wanted
-        for entry in inherited_path_dirs(read)
-    )
+    wanted = PureWindowsPath(ntpath.normpath(str(directory)))
+    return any(entry == wanted for entry in inherited_path_dirs(read))
 
 
 def path_note(spec: LaunchSpec, logon_mode: LogonMode) -> str | None:
