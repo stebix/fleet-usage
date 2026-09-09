@@ -112,6 +112,16 @@ def _tail(text: str, lines: int = STDERR_TAIL_LINES) -> str:
 def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
     """Run ``command`` without a shell and return the finished process.
 
+    The resolved path is handed to :func:`subprocess.run` as
+    ``executable`` while ``command`` stays the argument vector, so the
+    program still sees the configured name as ``argv[0]``. Multi-call
+    binaries dispatch on that name: ``bunx`` is a copy of ``bun`` that
+    only runs a package when it is called ``bunx``. On Windows
+    :func:`shutil.which` reports the extension in the case of ``PATHEXT``
+    rather than the case on disk, so passing its result as ``argv[0]``
+    would turn ``bunx`` into ``bunx.EXE``, and ``bun`` would fall back to
+    running the package specifier as a script file.
+
     Parameters
     ----------
     command : list of str
@@ -138,10 +148,10 @@ def _run(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
             'section and make sure the program is installed'
         )
         raise CollectorError(msg)
-    resolved = [executable, *command[1:]]
     try:
         return subprocess.run(
-            resolved,
+            command,
+            executable=executable,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,

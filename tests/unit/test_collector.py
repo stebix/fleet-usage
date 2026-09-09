@@ -3,6 +3,7 @@
 import copy
 import datetime as dt
 import json
+import subprocess
 import sys
 from decimal import Decimal
 
@@ -91,6 +92,31 @@ def test_run_collector_returns_parsed_json(tmp_path):
     payload = run_collector(collector)
     assert payload['daily'] == []
     assert payload['argv'] == build_command(collector)[2:]
+
+
+def test_run_collector_keeps_the_configured_name_as_argv0(monkeypatch):
+    """The collector must see the name it was configured with.
+
+    ``bunx`` is a copy of ``bun`` that only runs a package when it is
+    called ``bunx``, and on Windows ``shutil.which`` reports the
+    extension in the case of ``PATHEXT`` (``bunx.EXE``) rather than the
+    case on disk. Putting the looked up path into the argument vector
+    would therefore make ``bun`` treat ``ccusage@X.Y.Z`` as a script
+    file; the path belongs in ``executable`` instead.
+    """
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, '{"daily": []}', '')
+
+    monkeypatch.setattr('shutil.which', lambda name: '/usr/bin/BUNX.EXE')
+    monkeypatch.setattr('subprocess.run', fake_run)
+    collector = settings()
+    assert run_collector(collector) == {'daily': []}
+    argv, kwargs = calls[0]
+    assert argv == build_command(collector)
+    assert kwargs['executable'] == '/usr/bin/BUNX.EXE'
 
 
 def test_run_collector_missing_executable():
