@@ -524,13 +524,19 @@ def dev_checkout(tmp_path, monkeypatch):
 
 
 def test_a_development_checkout_is_refused(
-    invoke, app_paths, settings_file, fake_cron, dev_checkout, monkeypatch
+    invoke,
+    app_paths,
+    settings_file,
+    fake_cron,
+    dev_checkout,
+    monkeypatch,
+    tmp_path,
 ):
     monkeypatch.setattr(schedule_cmd, 'EXECUTABLE', None)
     result = install(invoke, settings_file)
     assert result.exit_code == ExitCode.CONFIG_ERROR, result.output
     assert 'development checkout' in result.output
-    assert 'uv tool install .' in result.output
+    assert f'uv tool install {tmp_path / "checkout"}' in result.output
     assert fake_cron.text is None
 
 

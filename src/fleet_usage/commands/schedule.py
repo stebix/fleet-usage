@@ -23,7 +23,7 @@ from fleet_usage.scheduling.base import (
     Scheduler,
     SchedulerError,
     build_launch_spec,
-    is_dev_checkout,
+    checkout_root,
     select_backend,
     subprocess_runner,
 )
@@ -49,8 +49,8 @@ __all__ = [
 DEV_CHECKOUT_WARNING = (
     'warning: the scheduled command is the console script of a '
     'development checkout; it stops working as soon as the virtual '
-    "environment is rebuilt or the checkout moves ('uv tool install .' "
-    'installs a stable one)'
+    "environment is rebuilt or the checkout moves ('uv tool install "
+    "{checkout}' installs a stable one)"
 )
 
 #: Subprocess seam; the tests replace it with a recording fake.
@@ -163,8 +163,11 @@ def _warn_about_a_dev_checkout(spec: LaunchSpec) -> None:
     spec : LaunchSpec
         The job description.
     """
-    if is_dev_checkout(spec.executable):
-        out_console().print(DEV_CHECKOUT_WARNING, markup=False)
+    checkout = checkout_root(spec.executable)
+    if checkout is not None:
+        out_console().print(
+            DEV_CHECKOUT_WARNING.format(checkout=checkout), markup=False
+        )
 
 
 def _launch_spec(

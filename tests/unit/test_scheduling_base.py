@@ -604,7 +604,7 @@ def test_resolve_executable_refuses_a_dev_checkout(tmp_path):
         )
     message = str(excinfo.value)
     assert 'development checkout' in message
-    assert 'uv tool install .' in message
+    assert f"'uv tool install {tmp_path / 'checkout'}'" in message
     assert '--allow-dev-checkout' in message
 
 

@@ -12,8 +12,12 @@ them on read.
 ## Install
 
 ```sh
-uv tool install fleet-usage
+uv tool install git+https://github.com/stebix/fleet-usage
 ```
+
+The package is not on PyPI, so `uv tool install fleet-usage` fails. From a
+local checkout, `uv tool install .` installs the same stable executable into
+`~/.local/bin`.
 
 Then create the local configuration and check it:
 

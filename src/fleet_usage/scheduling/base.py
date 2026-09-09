@@ -29,6 +29,7 @@ __all__ = [
     'CRON_PATH_DIRS',
     'DAILY_HOUR',
     'EXECUTABLE_NAME',
+    'INSTALL_HINT',
     'STANDARD_PATH_DIRS',
     'SYSTEMD_PATH_DIRS',
     'LaunchSpec',
@@ -39,6 +40,7 @@ __all__ = [
     'SchedulerError',
     'WhichCallable',
     'build_launch_spec',
+    'checkout_root',
     'collector_path_dirs',
     'cron_expression',
     'cron_quote',
@@ -57,6 +59,8 @@ __all__ = [
 ]
 
 EXECUTABLE_NAME = 'fleet-usage'
+#: The package is not published on PyPI; a permanent install comes from git.
+INSTALL_HINT = 'uv tool install git+https://github.com/stebix/fleet-usage'
 ALLOWED_INTERVALS = (15, 30, 60, 120, 180, 240, 360, 720, 1440)
 DAILY_HOUR = 3
 _MACHINE_ID_FILES = (
@@ -728,10 +732,30 @@ def is_dev_checkout(path: Path) -> bool:
     bool
         ``True`` when the executable belongs to a checkout.
     """
-    if '.venv' in path.parts:
-        return True
+    return checkout_root(path) is not None
+
+
+def checkout_root(path: Path) -> Path | None:
+    """Find the development checkout that owns the console script ``path``.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        An absolute, resolved path.
+
+    Returns
+    -------
+    pathlib.Path or None
+        The directory that ``uv tool install`` should be pointed at, or
+        ``None`` when ``path`` is not part of a checkout.
+    """
+    parts = path.parts
+    if '.venv' in parts:
+        return Path(*parts[: parts.index('.venv')])
     parents = path.parents
-    return len(parents) > 2 and (parents[2] / 'pyproject.toml').is_file()
+    if len(parents) > 2 and (parents[2] / 'pyproject.toml').is_file():
+        return parents[2]
+    return None
 
 
 def resolve_executable(
@@ -811,18 +835,19 @@ def resolve_executable(
                 f'refusing to schedule {resolved}: it is inside a '
                 'temporary directory and will not survive a reboot\n'
                 f'install fleet-usage permanently (for example with '
-                f"'uv tool install fleet-usage') and try again"
+                f"'{INSTALL_HINT}') and try again"
             )
             raise SchedulerError(msg)
-        if not allow_dev_checkout and is_dev_checkout(resolved):
+        checkout = None if allow_dev_checkout else checkout_root(resolved)
+        if checkout is not None:
             msg = (
                 f'refusing to schedule {resolved}: it belongs to a '
                 'development checkout, so the job breaks as soon as the '
                 'virtual environment is rebuilt or the checkout moves\n'
-                "install a stable executable with 'uv tool install .' "
-                '(it writes fleet-usage into ~/.local/bin) and run '
-                'schedule install again, or pass --allow-dev-checkout '
-                'to schedule this one anyway'
+                f"install a stable executable with 'uv tool install "
+                f"{checkout}' (it writes fleet-usage into ~/.local/bin) "
+                'and run schedule install again, or pass '
+                '--allow-dev-checkout to schedule this one anyway'
             )
             raise SchedulerError(msg)
         return resolved
@@ -830,7 +855,7 @@ def resolve_executable(
         f'cannot locate the {EXECUTABLE_NAME!r} executable\n'
         'a scheduled job needs an absolute path to it; install the '
         'package so that the console script exists, for example with '
-        "'uv tool install fleet-usage'"
+        f"'{INSTALL_HINT}'"
     )
     raise SchedulerError(msg)
 
