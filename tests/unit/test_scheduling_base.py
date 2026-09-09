@@ -1,5 +1,6 @@
 """Interval tables, quoting, executable lookup and backend selection."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,12 @@ from fleet_usage.scheduling.base import (
 from fleet_usage.scheduling.cron import CronScheduler
 from fleet_usage.scheduling.systemd import SystemdScheduler
 from fleet_usage.scheduling.windows import WindowsScheduler
+
+posix_only = pytest.mark.skipif(
+    os.name == 'nt',
+    reason='asserts POSIX path and PATH semantics',
+)
+
 
 OFFSET = 7
 
@@ -166,6 +173,7 @@ def test_systemd_quote(value, expected):
     assert systemd_quote(value) == expected
 
 
+@posix_only
 def test_launch_spec_command_renderings():
     spec = make_spec(
         executable=Path('/opt/my bin/fleet-usage'),
@@ -472,6 +480,7 @@ def test_path_value_defaults_to_the_standard_directories():
     )
 
 
+@posix_only
 def test_collector_outside_the_standard_directories_is_carried():
     dirs = base.collector_path_dirs(
         ['bunx', 'ccusage@20.0.20'],
@@ -480,6 +489,7 @@ def test_collector_outside_the_standard_directories_is_carried():
     assert dirs == ('/home/me/.bun/bin',)
 
 
+@posix_only
 def test_collector_in_a_standard_directory_adds_nothing():
     dirs = base.collector_path_dirs(
         ['ccusage'],
@@ -510,6 +520,7 @@ def test_force_waves_an_unresolvable_collector_through():
     assert dirs == ()
 
 
+@posix_only
 def test_resolve_collector_reports_the_program():
     found = base.resolve_collector(
         ['bunx'], which=lambda name: '/home/me/.bun/bin/bunx'
@@ -519,6 +530,7 @@ def test_resolve_collector_reports_the_program():
     assert base.resolve_collector(None, which=lambda name: None) is None
 
 
+@posix_only
 def test_build_launch_spec_carries_the_collector_directory(tmp_path):
     program = tmp_path / 'fleet-usage'
     program.write_text('')

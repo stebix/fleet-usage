@@ -3,6 +3,7 @@
 import base64
 import datetime as dt
 import json
+import os
 import time
 from decimal import Decimal
 
@@ -17,6 +18,12 @@ from fleet_usage.models import (
     Snapshot,
 )
 from fleet_usage.snapshot import agents_hash, snapshot_remote_path
+
+posix_only = pytest.mark.skipif(
+    os.name == 'nt',
+    reason='chmod cannot make a directory unwritable for its owner on Windows',
+)
+
 
 pytestmark = pytest.mark.httpx_mock(
     assert_all_responses_were_requested=False,
@@ -251,6 +258,7 @@ def test_a_missing_settings_file_exits_two(invoke, app_paths):
     assert result.exit_code == ExitCode.CONFIG_ERROR, result.output
 
 
+@posix_only
 def test_an_unwritable_spool_is_reported_without_a_traceback(
     invoke, configured, collected, httpx_mock
 ):

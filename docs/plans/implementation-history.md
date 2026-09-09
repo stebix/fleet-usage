@@ -690,3 +690,51 @@ For an interrupted batch, record partial work and leave its remaining boxes open
   still pending.
 - Next step: confirm the Windows leg is green on this commit; G3-03
   read-only token; IMP-305.
+
+### 2026-09-09 — Windows CI: POSIX-only scheduler tests skipped
+
+- History ID: HIST-012.
+- Request: check the Windows run after HIST-011 and handle what it
+  reported.
+- Finding: the tzdata dependency fixed the collection error, so the
+  Windows leg ran its first real suite: 18 failed, 708 passed, 10
+  skipped, 1 error, against 0 tests executed before. Ubuntu is green on
+  every step. All 18 failures are platform assumptions in the tests, not
+  product defects. `resolve_collector` is handed the POSIX literal
+  `/home/me/.bun/bin/bunx`, which Windows anchors to the current drive
+  as `D:/home/me/...`; the cron and systemd cases assert rendered
+  crontab lines and unit files for backends that never run on Windows;
+  the doctor cases assert `/home/tester/.bun/bin` PATH strings; the
+  publish case relies on `chmod` making a directory unwritable, which
+  does not restrict the owner on Windows, so the spool write succeeded
+  and the mocked requests went unmatched.
+- Product check: `path_value` joins with a hard coded `':'` at
+  `base.py:486`, but its only callers are `cron.py:176` and
+  `systemd.py:90`, both POSIX-only backends. The Task Scheduler backend
+  does not carry a PATH; `windows.py:366` instead warns that the
+  collector must already be on the system or user PATH. The separator is
+  therefore correct and no Windows product defect was found.
+- Changes: a local `posix_only = pytest.mark.skipif(os.name == 'nt', ...)`
+  marker in each of the six affected files, following the `needs_systemd`
+  convention already in `tests/unit/test_scheduling_systemd.py`, applied
+  to exactly the 18 failing tests with a reason naming the platform
+  assumption. The tests are not rewritten to be platform neutral: cron
+  and systemd cannot run on Windows, so exercising their rendering there
+  verifies nothing about the shipped behaviour.
+- Validation: on Linux all 736 tests still run and pass, with no new
+  skips, so the marker changes nothing on the platform that can execute
+  these paths. An AST check confirms the marker is defined once per file
+  with the condition `os.name == 'nt'` and decorates exactly the 18
+  intended tests and no others. `uv run ruff check .`,
+  `uv run ruff format --check .`, `uv run mypy src/fleet_usage` clean;
+  `uv run pytest -q` 736 passed; `uv build` produces both artefacts.
+- Risks/limitations: Windows now has no coverage of the cron, systemd,
+  PATH-carrying and unwritable-spool paths. Three of those are POSIX-only
+  by construction; the unwritable-spool case is a genuine gap, since the
+  Windows failure mode for an unwritable spool is untested. The Task
+  Scheduler backend keeps its coverage, as
+  `tests/unit/test_scheduling_windows.py` drives it through injected
+  seams and passed on both platforms. QA-G5 for Windows still needs a
+  real Windows machine.
+- Next step: confirm the Windows leg is green; G3-03 read-only token;
+  IMP-305.

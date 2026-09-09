@@ -1,12 +1,18 @@
 """Tests for ``fleet-usage doctor``."""
 
 import datetime as dt
+import os
 
 import pytest
 
 from fleet_usage.exit_codes import ExitCode
 from fleet_usage.github import AccessReport
 from fleet_usage.models import Ledger, MergePolicy
+
+posix_only = pytest.mark.skipif(
+    os.name == 'nt',
+    reason='asserts the PATH coverage of the POSIX schedulers',
+)
 
 
 @pytest.fixture(autouse=True)
@@ -210,6 +216,7 @@ def collector_at(monkeypatch, tmp_path, directory: str):
     monkeypatch.setattr('subprocess.run', lambda *a, **k: Completed())
 
 
+@posix_only
 def test_doctor_warns_when_the_collector_is_outside_the_system_dirs(
     invoke, app_paths, monkeypatch, tmp_path
 ):
@@ -231,6 +238,7 @@ def test_doctor_warns_when_the_collector_is_outside_the_system_dirs(
     assert "run 'fleet-usage schedule install'" in flattened(result.output)
 
 
+@posix_only
 def test_doctor_is_quiet_about_a_collector_in_a_system_directory(
     invoke, app_paths, monkeypatch, tmp_path
 ):
@@ -246,6 +254,7 @@ def test_doctor_is_quiet_about_a_collector_in_a_system_directory(
     assert 'collector PATH' not in result.output
 
 
+@posix_only
 def test_doctor_accepts_a_schedule_that_carries_the_directory(
     invoke, app_paths, monkeypatch, tmp_path
 ):

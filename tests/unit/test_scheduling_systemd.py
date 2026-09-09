@@ -1,6 +1,7 @@
 """systemd unit rendering, quoting and timer lifecycle."""
 
 import dataclasses
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -23,6 +24,12 @@ from fleet_usage.scheduling.systemd import (
     render_timer,
     unit_directory,
 )
+
+posix_only = pytest.mark.skipif(
+    os.name == 'nt',
+    reason='the systemd user manager runs only on POSIX systems',
+)
+
 
 OFFSET = 7
 AWKWARD = '/etc/fleet conf/set"tings 100%.toml'
@@ -92,6 +99,7 @@ def test_unit_directory_default(monkeypatch, tmp_path):
     assert unit_directory({}) == tmp_path / '.config' / 'systemd' / 'user'
 
 
+@posix_only
 def test_service_unit_contents(tmp_path):
     text = render_service(make_spec(tmp_path))
     assert '[Service]' in text
@@ -106,6 +114,7 @@ def test_service_unit_contents(tmp_path):
     assert text.endswith('\n')
 
 
+@posix_only
 def test_service_unit_quotes_spaces_quotes_and_percent(tmp_path):
     text = render_service(make_spec(tmp_path, settings=AWKWARD))
     exec_line = next(
@@ -250,6 +259,7 @@ def test_status_when_nothing_is_installed(tmp_path):
     assert status.backend == 'systemd'
 
 
+@posix_only
 def test_status_when_the_timer_is_active(tmp_path):
     fake = FakeSystemctl(
         {

@@ -1,5 +1,6 @@
 """``fleet-usage schedule`` end to end, with a fake scheduler runner."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,12 @@ from fleet_usage.commands import schedule as schedule_cmd
 from fleet_usage.exit_codes import ExitCode
 from fleet_usage.scheduling.base import RunResult
 from fleet_usage.scheduling.cron import BEGIN_MARKER, find_block
+
+posix_only = pytest.mark.skipif(
+    os.name == 'nt',
+    reason='exercises the POSIX scheduler backends',
+)
+
 
 SETTINGS = """schema_version = 1
 
@@ -121,6 +128,7 @@ def fake_cron(tmp_path, monkeypatch):
     return fake
 
 
+@posix_only
 def test_install_writes_the_managed_block(
     invoke, app_paths, settings_file, fake_cron
 ):
@@ -382,6 +390,7 @@ def test_unresolvable_executable_is_refused(
     assert 'cannot locate' in result.output
 
 
+@posix_only
 def test_no_supported_backend(
     invoke, app_paths, settings_file, tmp_path, monkeypatch
 ):
@@ -450,6 +459,7 @@ def install(invoke, settings_file, *extra):
     )
 
 
+@posix_only
 def test_the_job_carries_the_collector_directory(
     invoke, app_paths, settings_file, fake_cron, monkeypatch
 ):

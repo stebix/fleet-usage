@@ -1,5 +1,6 @@
 """Crontab block management, idempotence and byte-for-byte preservation."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,12 @@ from fleet_usage.scheduling.cron import (
     replace_block,
     strip_block,
 )
+
+posix_only = pytest.mark.skipif(
+    os.name == 'nt',
+    reason='cron runs only on POSIX systems',
+)
+
 
 OFFSET = 7
 
@@ -88,6 +95,7 @@ def make_scheduler(tmp_path, fake, **spec_kwargs):
 # --------------------------------------------------------- pure functions
 
 
+@posix_only
 def test_render_block_shape(tmp_path):
     block = render_block(make_spec(tmp_path), OFFSET)
     lines = block.splitlines()
@@ -163,6 +171,7 @@ def test_no_env_prefix_without_extra_directories(tmp_path):
     assert 'env PATH=' not in render_block(make_spec(tmp_path), OFFSET)
 
 
+@posix_only
 def test_job_carries_the_collector_directory(tmp_path):
     spec = make_spec(tmp_path, extra_path_dirs=(BUN_DIR,))
     assert env_prefix(spec) == f'{BUN_PATH} '
@@ -296,6 +305,7 @@ def test_dry_run_uninstall_keeps_the_block(tmp_path):
     assert fake.text == before
 
 
+@posix_only
 def test_status_reports_the_expression_and_command(tmp_path):
     fake = FakeCrontab(EXISTING)
     scheduler = make_scheduler(tmp_path, fake)
