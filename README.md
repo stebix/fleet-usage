@@ -46,6 +46,13 @@ GitHub token with *contents: read and write* on the data repository into that
 | `fleet-usage rebuild` | Rebuild a ledger from its snapshots. |
 | `fleet-usage schedule` | Install, inspect or remove the hourly job. |
 
+`show` groups by machine (`--by machine|agent|model|day|month`), reports the
+period set by `report.default_period` unless `--since` and `--until` say
+otherwise, and prints a table, `--format json` or `--format csv`. Every group
+is broken down by model; `--flat` reports the group totals alone. Costs are
+shown to the cent, while the JSON and CSV documents keep the full precision
+the collector recorded.
+
 Global options: `--config PATH` selects the settings file (the environment
 variable `FLEET_USAGE_CONFIG` does the same), `--version` prints the version.
 
@@ -54,8 +61,8 @@ Exit codes: `0` success, `2` configuration error, `3` collection failure,
 
 ## Status
 
-Early development. `init`, `doctor` and `config show` work; the remaining
-commands are stubs that exit with code 1.
+Early development. Every command listed above is implemented and covered by
+tests, which run on Linux and Windows.
 
 ## Development
 
