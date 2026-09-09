@@ -647,3 +647,46 @@ For an interrupted batch, record partial work and leave its remaining boxes open
   nothing validates pricing consistency across snapshots.
 - Next step: G3-03 read-only token; IMP-305. Roll the setting out to the
   remaining fleet machines as they are provisioned.
+
+### 2026-09-09 — Windows CI: missing IANA database
+
+- History ID: HIST-011.
+- Request: check the CI pipeline failure on the Windows runner.
+- Finding: the `windows-latest` leg fails at the pytest step during
+  collection of `tests/unit/test_ledger.py` and
+  `tests/unit/test_snapshot.py` with
+  `ModuleNotFoundError: No module named 'tzdata'` and
+  `ZoneInfoNotFoundError: 'No time zone found with key Europe/Berlin'`.
+  Windows ships no IANA database, so `zoneinfo` falls back to the
+  `tzdata` distribution, which was not a dependency. `ubuntu-latest`
+  passes every step. The failure predates HIST-010: the same error is in
+  run 34348122410, and all three runs executed since the repository was
+  pushed failed identically, so the Windows leg has never been green.
+- Severity: this is a runtime defect, not a test-only one.
+  `zoneinfo.ZoneInfo` is called from shipped code at `config.py:98`
+  (the `_check_timezone` validator) and `ledger.py:129` (the freeze
+  boundary), so a Windows fleet machine would have rejected its own
+  configured timezone on the first run. Windows is a supported target:
+  `scheduling/windows.py` and the Windows branch of `paths.py`.
+- Changes: `pyproject.toml` adds `tzdata>=2024.1; sys_platform ==
+  "win32"` to the runtime dependencies, not the dev group, because the
+  application needs it and not only the tests. `uv.lock` regenerated
+  (tzdata 2026.3) with the same marker; the lockfile has to move with
+  the manifest because CI runs `uv sync --locked`.
+- Validation: the Windows condition was reproduced on Linux by setting
+  `PYTHONTZPATH` to a nonexistent directory, which forces the same
+  tzdata fallback: without the package `ZoneInfo('Europe/Berlin')`
+  raises the CI error verbatim, with it the zone resolves. The full
+  suite passes under that condition, 736 passed, with the zone data
+  served only by tzdata. `uv sync --locked` succeeds and correctly omits
+  tzdata on Linux. `uv run ruff check .`, `uv run ruff format --check .`,
+  `uv run mypy src/fleet_usage` clean; `uv run pytest -q` 736 passed;
+  `uv build` produces both artefacts.
+- Risks/limitations: the marker installs tzdata only on Windows, so a
+  minimal Linux container without a system zone database would fail the
+  same way; the fleet targets desktop machines, where the system
+  database is present. Windows remains unverified beyond CI: no Windows
+  machine has been provisioned, so G5 for the Task Scheduler backend is
+  still pending.
+- Next step: confirm the Windows leg is green on this commit; G3-03
+  read-only token; IMP-305.

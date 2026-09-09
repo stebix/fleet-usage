@@ -25,6 +25,8 @@ dependencies = [
     'python-dotenv>=1.0',
     'rich>=13.9',
     'typer>=0.15',
+    # Windows ships no IANA database; zoneinfo falls back to this package.
+    'tzdata>=2024.1; sys_platform == "win32"',
 ]
 
 [project.scripts]
