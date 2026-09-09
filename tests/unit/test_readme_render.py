@@ -3,6 +3,7 @@
 import ast
 import datetime as dt
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,34 @@ def test_model_table_lists_every_model(document):
     assert '| claude-fable-5-1 |' in document
     assert '| claude-sonnet-4-6 |' in document
     assert '| gpt-5-codex |' in document
+
+
+def test_costs_are_cropped_to_cents(document):
+    tables = document[document.index('## Totals') : document.index('## Daily')]
+    assert '| &ge; 9.45 |' in tables
+    assert '| 0.55 |' in tables
+    assert '| &ge; 8.75 |' in tables
+    assert '9.4500' not in tables
+
+
+def test_format_amount_matches_reporting():
+    for amount in (
+        Decimal('0'),
+        Decimal('0.000001'),
+        Decimal('0.004000'),
+        Decimal('3.999999'),
+        Decimal('68.258780'),
+        Decimal('1234567.891234'),
+    ):
+        for floor in (False, True):
+            mine = readme_render._format_amount(amount, floor=floor)
+            theirs = reporting.format_amount(amount, floor=floor)
+            expected = (
+                readme_render.SUBCENT_COST
+                if theirs == reporting.SUBCENT_COST
+                else theirs
+            )
+            assert mine == expected, (amount, floor)
 
 
 def test_chart_is_mermaid_and_skips_unpriced_days(document):

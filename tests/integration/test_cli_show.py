@@ -144,6 +144,150 @@ def test_csv_report(invoke, configure):
     ]
 
 
+def test_the_table_breaks_down_by_model_by_default(
+    invoke, configure, monkeypatch
+):
+    configure()
+    monkeypatch.setenv('COLUMNS', '120')
+    result = invoke('show', '--since', '2026-09-01', '--until', '2026-09-05')
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'fedora-mobile' in result.output
+    assert '├─ claude-fable-5-1' in result.output
+    assert '└─ gpt-5-codex' in result.output
+    assert '>= 8.75' in result.output  # the fleet total for that model
+    assert '3.6000' not in result.output  # cropped to cents
+
+
+def test_breakdown_spelled_out_matches_the_default(
+    invoke, configure, monkeypatch
+):
+    configure()
+    monkeypatch.setenv('COLUMNS', '120')
+    args = ('show', '--since', '2026-09-01', '--until', '2026-09-05')
+    assert invoke(*args, '--breakdown').output == invoke(*args).output
+
+
+def test_flat_drops_the_model_sub_rows(invoke, configure, monkeypatch):
+    configure()
+    monkeypatch.setenv('COLUMNS', '120')
+    result = invoke(
+        'show', '--flat', '--since', '2026-09-01', '--until', '2026-09-05'
+    )
+    assert result.exit_code == ExitCode.OK, result.output
+    assert 'fedora-mobile' in result.output
+    assert 'claude-fable-5-1' not in result.output
+    assert '12,532' in result.output
+
+
+def test_flat_drops_the_models_from_json(invoke, configure):
+    configure()
+    result = invoke(
+        'show',
+        '--flat',
+        '--since',
+        '2026-09-01',
+        '--until',
+        '2026-09-05',
+        '--format',
+        'json',
+    )
+    assert result.exit_code == ExitCode.OK, result.output
+    payload = payload_of(result)
+    assert all('models' not in row for row in payload['rows'])
+    assert 'models' not in payload['totals']
+
+
+def test_flat_drops_the_model_column_from_csv(invoke, configure):
+    configure()
+    result = invoke(
+        'show',
+        '--flat',
+        '--since',
+        '2026-09-01',
+        '--until',
+        '2026-09-05',
+        '--format',
+        'csv',
+    )
+    assert result.exit_code == ExitCode.OK, result.output
+    rows = list(csv.reader(io.StringIO(result.output)))
+    assert rows[0] == list(show_module.reporting.CSV_COLUMNS)
+    assert [row[0] for row in rows[1:] if row] == [M1, M3, M2]
+
+
+def test_table_costs_are_cropped_to_cents(invoke, configure, monkeypatch):
+    configure()
+    monkeypatch.setenv('COLUMNS', '120')
+    result = invoke('show', '--since', '2026-09-01', '--until', '2026-09-05')
+    assert result.exit_code == ExitCode.OK, result.output
+    assert '5.85' in result.output
+    assert '5.8500' not in result.output
+    assert '>= 9.45' in result.output
+
+
+def test_json_nests_models_by_default(invoke, configure):
+    configure()
+    result = invoke(
+        'show',
+        '--by',
+        'agent',
+        '--since',
+        '2026-09-01',
+        '--until',
+        '2026-09-05',
+        '--format',
+        'json',
+    )
+    assert result.exit_code == ExitCode.OK, result.output
+    payload = payload_of(result)
+    claude = payload['rows'][0]
+    assert claude['key'] == 'claude'
+    assert [model['key'] for model in claude['models']] == [
+        'claude-fable-5-1',
+        'claude-sonnet-4-6',
+    ]
+    assert payload['totals']['models'][0]['cost_usd'] == '8.7500'
+
+
+def test_csv_carries_a_model_column_by_default(invoke, configure):
+    configure()
+    result = invoke(
+        'show',
+        '--since',
+        '2026-09-01',
+        '--until',
+        '2026-09-05',
+        '--format',
+        'csv',
+    )
+    assert result.exit_code == ExitCode.OK, result.output
+    rows = list(csv.reader(io.StringIO(result.output)))
+    assert rows[0][-1] == 'model'
+    assert rows[1][-1] == ''
+    assert rows[2][-1] == 'claude-fable-5-1'
+    assert rows[2][0] == M1
+
+
+def test_breakdown_is_ignored_when_grouping_by_model(invoke, configure):
+    configure()
+    args = (
+        'show',
+        '--by',
+        'model',
+        '--since',
+        '2026-09-01',
+        '--until',
+        '2026-09-05',
+        '--format',
+        'csv',
+    )
+    detailed = invoke(*args)
+    assert detailed.exit_code == ExitCode.OK, detailed.output
+    assert invoke(*args, '--flat').output == detailed.output
+    rows = list(csv.reader(io.StringIO(detailed.output)))
+    assert rows[0] == list(show_module.reporting.CSV_COLUMNS)
+
+
 @pytest.mark.parametrize('by', ['machine', 'agent', 'model', 'day', 'month'])
 def test_every_grouping_works(invoke, configure, by):
     configure()

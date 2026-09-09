@@ -170,6 +170,13 @@ def show_command(
         ShowFormat,
         typer.Option('--format', help='Output format.'),
     ] = ShowFormat.TABLE,
+    breakdown: Annotated[
+        bool,
+        typer.Option(
+            '--breakdown/--flat',
+            help='Break every group down by model. Ignored with --by model.',
+        ),
+    ] = True,
     offline: Annotated[
         bool,
         typer.Option('--offline', help='Use the cached ledgers only.'),
@@ -193,6 +200,9 @@ def show_command(
         Last day to include.
     output_format : ShowFormat, optional
         Output format.
+    breakdown : bool, optional
+        Break every group down by model. On by default; ``--flat``
+        reports the group totals alone.
     offline : bool, optional
         Do not contact GitHub.
     web : bool, optional
@@ -209,12 +219,25 @@ def show_command(
     fleet = reporting.apply_corrections(fleet, {})
 
     group = str(by)
-    rows = reporting.aggregate(fleet, by=by.value, since=start, until=end)
-    totals = reporting.fleet_totals(fleet, since=start, until=end)
+    rows: list[reporting.Row] | list[reporting.RowGroup]
+    totals: reporting.Row | reporting.RowGroup
+    # Grouping by model already puts one model per row, so a breakdown
+    # would only repeat each row underneath itself.
+    detailed = breakdown and by is not GroupBy.MODEL
+    if detailed:
+        rows = reporting.aggregate_grouped(
+            fleet, by=by.value, since=start, until=end
+        )
+        totals = reporting.fleet_totals_grouped(fleet, since=start, until=end)
+        total_row = totals.row
+    else:
+        rows = reporting.aggregate(fleet, by=by.value, since=start, until=end)
+        totals = reporting.fleet_totals(fleet, since=start, until=end)
+        total_row = totals
     statuses = reporting.machine_status(
         fleet, now, settings.report.stale_after_hours
     )
-    summary = reporting.build_summary(fleet, statuses, totals)
+    summary = reporting.build_summary(fleet, statuses, total_row)
 
     if output_format is ShowFormat.JSON:
         print_data(
@@ -230,7 +253,7 @@ def show_command(
         )
         return
     if output_format is ShowFormat.CSV:
-        print_data(reporting.render_csv(rows).rstrip('\n'))
+        print_data(reporting.render_csv(rows, breakdown=detailed).rstrip('\n'))
         return
     reporting.render_table(
         rows,

@@ -18,12 +18,13 @@ import json
 import sys
 import tomllib
 from collections.abc import Iterator
-from decimal import Decimal
+from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 from typing import Any, NamedTuple
 
 __all__ = [
     'DEFAULT_STALE_AFTER_HOURS',
+    'SUBCENT_COST',
     'UNKNOWN_COST',
     'Machine',
     'Totals',
@@ -39,6 +40,8 @@ DEFAULT_STALE_AFTER_HOURS = 3
 CHART_DAYS = 30
 UNKNOWN_COST = '—'
 UNKNOWN_MODEL = '(unknown)'
+SUBCENT_COST = '&lt;0.01'
+COST_PLACES = Decimal('0.01')
 TIMESTAMP_FORMAT = '%Y-%m-%dT%H:%M:%SZ'
 MANIFEST_NAME = 'fleet.toml'
 MACHINES_DIR = 'machines'
@@ -475,6 +478,35 @@ def _escape(text: str) -> str:
     return ' '.join(out.split())
 
 
+def _format_amount(amount: Decimal, floor: bool = False) -> str:
+    """Render an amount in dollars and cents.
+
+    This mirrors :func:`fleet_usage.reporting.format_amount`, which
+    cannot be imported here, so that the README and the command line
+    report the same figures.
+
+    Parameters
+    ----------
+    amount : decimal.Decimal
+        A non-negative amount in US dollars.
+    floor : bool, optional
+        Round down instead of to nearest, so that a lower bound is
+        never rounded up into a claim the data does not support.
+
+    Returns
+    -------
+    str
+        For example ``'1,234.57'``. A positive amount that rounds away
+        to nothing becomes :data:`SUBCENT_COST`, so a nearly free row
+        is never mistaken for an unused one.
+    """
+    rounding = ROUND_FLOOR if floor else ROUND_HALF_EVEN
+    quantized = amount.quantize(COST_PLACES, rounding=rounding)
+    if quantized == 0 and amount > 0:
+        return SUBCENT_COST
+    return f'{quantized:,.2f}'
+
+
 def _format_cost(totals: Totals) -> str:
     """Render a cost for a Markdown table.
 
@@ -491,7 +523,7 @@ def _format_cost(totals: Totals) -> str:
     """
     if totals.cost_usd is None:
         return UNKNOWN_COST
-    amount = f'{totals.cost_usd:.4f}'
+    amount = _format_amount(totals.cost_usd, floor=not totals.cost_known)
     return amount if totals.cost_known else f'&ge; {amount}'
 
 

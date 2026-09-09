@@ -20,7 +20,7 @@ import datetime as dt
 import io
 import json
 from collections.abc import Iterable, Iterator, Mapping
-from decimal import Decimal
+from decimal import ROUND_FLOOR, ROUND_HALF_EVEN, Decimal
 from typing import Any, Literal
 
 from rich.console import Console
@@ -33,18 +33,23 @@ from fleet_usage.models import DayRecord, LedgerDayRecord, ModelRecord
 from fleet_usage.ui import out_console
 
 __all__ = [
+    'SUBCENT_COST',
     'UNKNOWN_COST',
     'UNKNOWN_MODEL',
     'Freshness',
     'GroupKey',
     'MachineStatus',
     'Row',
+    'RowGroup',
     'StatusSummary',
     'aggregate',
+    'aggregate_grouped',
     'apply_corrections',
     'build_summary',
     'default_range',
     'fleet_totals',
+    'fleet_totals_grouped',
+    'format_amount',
     'format_cost',
     'machine_status',
     'render_csv',
@@ -60,6 +65,12 @@ Freshness = Literal['fresh', 'stale', 'never']
 UNKNOWN_COST = '—'
 UNKNOWN_MODEL = '(unknown)'
 PARTIAL_PREFIX = '>= '
+SUBCENT_COST = '<0.01'
+BRANCH_PREFIX = '  ├─ '
+LAST_BRANCH_PREFIX = '  └─ '
+
+COST_PLACES = Decimal('0.01')
+"""Costs are reported to the cent; finer digits say nothing to a reader."""
 
 GROUP_LABELS: dict[str, tuple[str, str]] = {
     'machine': ('machine', 'label'),
@@ -69,6 +80,7 @@ GROUP_LABELS: dict[str, tuple[str, str]] = {
     'month': ('month', 'month'),
 }
 
+MODEL_COLUMN = 'model'
 CSV_COLUMNS = (
     'key',
     'label',
@@ -140,6 +152,24 @@ class Row:
             + self.cache_create_tokens
             + self.cache_read_tokens
         )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RowGroup:
+    """An aggregated group together with its per-model breakdown.
+
+    Attributes
+    ----------
+    row
+        The group itself, identical to what :func:`aggregate` returns.
+    models
+        One row per model that contributed to ``row``, ordered by
+        descending cost. Empty when no breakdown was requested, which
+        makes a group render exactly like a bare :class:`Row`.
+    """
+
+    row: Row
+    models: tuple[Row, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -266,6 +296,7 @@ class _Bucket:
     cost_usd: Decimal | None = None
     unknown_cost_records: int = 0
     record_count: int = 0
+    models: dict[str, '_Bucket'] = dataclasses.field(default_factory=dict)
 
     def add(self, record: DayRecord | ModelRecord) -> None:
         """Fold one usage record into the accumulator.
@@ -287,6 +318,22 @@ class _Bucket:
             return
         current = self.cost_usd if self.cost_usd is not None else Decimal(0)
         self.cost_usd = current + record.cost_usd
+
+    def add_models(self, day: DayRecord) -> None:
+        """Fold the model breakdown of a day into the child buckets.
+
+        Parameters
+        ----------
+        day : DayRecord
+            The record whose breakdown is wanted. A record without one
+            contributes under :data:`UNKNOWN_MODEL`, so the children
+            always sum to the parent.
+        """
+        for record in _model_records(day):
+            child = self.models.setdefault(
+                record.model, _Bucket(label=record.model)
+            )
+            child.add(record)
 
     def to_row(self, group: str, key: str) -> Row:
         """Freeze the accumulator into a row.
@@ -409,6 +456,116 @@ def _group_of(
     return iso, iso
 
 
+def _buckets(
+    fleet: FleetData,
+    by: GroupKey,
+    since: dt.date | None,
+    until: dt.date | None,
+    *,
+    breakdown: bool,
+) -> dict[str, _Bucket]:
+    """Fold every day record in the interval into its group.
+
+    Parameters
+    ----------
+    fleet : FleetData
+        The fetched fleet.
+    by : GroupKey
+        Grouping dimension.
+    since, until : datetime.date or None
+        Inclusive bounds of the reporting interval.
+    breakdown : bool
+        Whether each bucket also accumulates its per-model children.
+        Ignored for ``by='model'``, where the rows are the models.
+
+    Returns
+    -------
+    dict of str to _Bucket
+        One accumulator per non-empty group, keyed by group key.
+
+    Raises
+    ------
+    ValueError
+        If ``by`` is not a known dimension.
+    """
+    if by not in GROUP_LABELS:
+        msg = f'unknown grouping {by!r}'
+        raise ValueError(msg)
+    buckets: dict[str, _Bucket] = {}
+    for machine_id, agent, day in _iter_days(fleet, since, until):
+        if by == 'model':
+            for record in _model_records(day):
+                bucket = buckets.setdefault(
+                    record.model, _Bucket(label=record.model)
+                )
+                bucket.add(record)
+            continue
+        key, label = _group_of(by, fleet, machine_id, agent, day)
+        bucket = buckets.setdefault(key, _Bucket(label=label))
+        bucket.add(day)
+        if breakdown:
+            bucket.add_models(day)
+    return buckets
+
+
+def _row_sort_key(by: str, row: Row) -> tuple[str, str]:
+    """Return the ordering key of a top level row.
+
+    Parameters
+    ----------
+    by : str
+        The grouping dimension.
+    row : Row
+        The row to place.
+
+    Returns
+    -------
+    tuple of (str, str)
+        Machines sort by label, everything else by key, which is
+        already the chronological order for days and months.
+    """
+    if by == 'machine':
+        return row.label, row.key
+    return row.key, row.key
+
+
+def _model_rows(bucket: _Bucket) -> tuple[Row, ...]:
+    """Freeze the children of a bucket into ordered model rows.
+
+    Parameters
+    ----------
+    bucket : _Bucket
+        The parent accumulator.
+
+    Returns
+    -------
+    tuple of Row
+        One row per model, most expensive first, ties broken by model
+        name. Models whose cost is unknown come last, because they
+        cannot be placed against a priced one.
+    """
+    rows = [child.to_row('model', key) for key, child in bucket.models.items()]
+    return tuple(sorted(rows, key=_model_sort_key))
+
+
+def _model_sort_key(row: Row) -> tuple[int, Decimal, str]:
+    """Return the ordering key of a model sub-row.
+
+    Parameters
+    ----------
+    row : Row
+        The model row.
+
+    Returns
+    -------
+    tuple of (int, decimal.Decimal, str)
+        Priced rows first, then descending cost, then the model name.
+    """
+    if row.cost_usd is None:
+        return 1, Decimal(0), row.key
+    return 0, -row.cost_usd, row.key
+
+
 def aggregate(
     fleet: FleetData,
     *,
@@ -448,25 +605,52 @@ def aggregate(
     ValueError
         If ``by`` is not a known dimension.
     """
-    if by not in GROUP_LABELS:
-        msg = f'unknown grouping {by!r}'
-        raise ValueError(msg)
-    buckets: dict[str, _Bucket] = {}
-    for machine_id, agent, day in _iter_days(fleet, since, until):
-        if by == 'model':
-            for record in _model_records(day):
-                bucket = buckets.setdefault(
-                    record.model, _Bucket(label=record.model)
-                )
-                bucket.add(record)
-            continue
-        key, label = _group_of(by, fleet, machine_id, agent, day)
-        bucket = buckets.setdefault(key, _Bucket(label=label))
-        bucket.add(day)
+    buckets = _buckets(fleet, by, since, until, breakdown=False)
     rows = [bucket.to_row(by, key) for key, bucket in buckets.items()]
-    if by == 'machine':
-        return sorted(rows, key=lambda row: (row.label, row.key))
-    return sorted(rows, key=lambda row: row.key)
+    return sorted(rows, key=lambda row: _row_sort_key(by, row))
+
+
+def aggregate_grouped(
+    fleet: FleetData,
+    *,
+    by: GroupKey = 'machine',
+    since: dt.date | None = None,
+    until: dt.date | None = None,
+) -> list[RowGroup]:
+    """Aggregate as :func:`aggregate` and attach a model breakdown.
+
+    Every group carries the models that contributed to it, with their
+    own token counters and costs, so that the sub-rows always sum to
+    their parent. Grouping by model yields groups without children,
+    because the rows are already the models.
+
+    Parameters
+    ----------
+    fleet : FleetData
+        Manifest and ledgers.
+    by : {'machine', 'agent', 'model', 'day', 'month'}, optional
+        Grouping dimension.
+    since : datetime.date or None, optional
+        First day to include.
+    until : datetime.date or None, optional
+        Last day to include.
+
+    Returns
+    -------
+    list of RowGroup
+        In the same order as :func:`aggregate`.
+
+    Raises
+    ------
+    ValueError
+        If ``by`` is not a known dimension.
+    """
+    buckets = _buckets(fleet, by, since, until, breakdown=by != 'model')
+    groups = [
+        RowGroup(row=bucket.to_row(by, key), models=_model_rows(bucket))
+        for key, bucket in buckets.items()
+    ]
+    return sorted(groups, key=lambda group: _row_sort_key(by, group.row))
 
 
 def _model_records(day: DayRecord) -> list[ModelRecord]:
@@ -499,6 +683,37 @@ def _model_records(day: DayRecord) -> list[ModelRecord]:
     ]
 
 
+def _fleet_bucket(
+    fleet: FleetData,
+    since: dt.date | None,
+    until: dt.date | None,
+    *,
+    breakdown: bool,
+) -> _Bucket:
+    """Fold the whole fleet into a single accumulator.
+
+    Parameters
+    ----------
+    fleet : FleetData
+        The fetched fleet.
+    since, until : datetime.date or None
+        Inclusive bounds of the reporting interval.
+    breakdown : bool
+        Whether the per-model children are accumulated as well.
+
+    Returns
+    -------
+    _Bucket
+        The accumulator behind the fleet total row.
+    """
+    bucket = _Bucket(label='fleet')
+    for _machine_id, _agent, day in _iter_days(fleet, since, until):
+        bucket.add(day)
+        if breakdown:
+            bucket.add_models(day)
+    return bucket
+
+
 def fleet_totals(
     fleet: FleetData,
     *,
@@ -521,10 +736,38 @@ def fleet_totals(
     Row
         A single row with ``group='fleet'`` and ``key='fleet'``.
     """
-    bucket = _Bucket(label='fleet')
-    for _machine_id, _agent, day in _iter_days(fleet, since, until):
-        bucket.add(day)
+    bucket = _fleet_bucket(fleet, since, until, breakdown=False)
     return bucket.to_row('fleet', 'fleet')
+
+
+def fleet_totals_grouped(
+    fleet: FleetData,
+    *,
+    since: dt.date | None = None,
+    until: dt.date | None = None,
+) -> RowGroup:
+    """Total the fleet and attach its per-model breakdown.
+
+    Parameters
+    ----------
+    fleet : FleetData
+        The fetched fleet.
+    since : datetime.date or None, optional
+        First day to include.
+    until : datetime.date or None, optional
+        Last day to include.
+
+    Returns
+    -------
+    RowGroup
+        The fleet total with one sub-row per model, most expensive
+        first. The sub-rows are the same numbers
+        :func:`aggregate` produces for ``by='model'``.
+    """
+    bucket = _fleet_bucket(fleet, since, until, breakdown=True)
+    return RowGroup(
+        row=bucket.to_row('fleet', 'fleet'), models=_model_rows(bucket)
+    )
 
 
 def machine_status(
@@ -713,6 +956,35 @@ def _age_label(
     return f'fetched {int(seconds // 86400)} d ago'
 
 
+def format_amount(amount: Decimal, *, floor: bool = False) -> str:
+    """Render an amount in dollars and cents.
+
+    Only the display is cropped: the aggregation, the JSON output and
+    the CSV output keep every digit the collector reported.
+
+    Parameters
+    ----------
+    amount : decimal.Decimal
+        A non-negative amount in US dollars.
+    floor : bool, optional
+        Round down instead of to nearest. Used for a lower bound, which
+        must never be rounded up into a claim the data does not
+        support.
+
+    Returns
+    -------
+    str
+        For example ``'1,234.57'``. An amount that is positive but
+        rounds away to nothing becomes :data:`SUBCENT_COST`, so that a
+        nearly free group is never mistaken for an unused one.
+    """
+    rounding = ROUND_FLOOR if floor else ROUND_HALF_EVEN
+    quantized = amount.quantize(COST_PLACES, rounding=rounding)
+    if quantized == 0 and amount > 0:
+        return SUBCENT_COST
+    return f'{quantized:,.2f}'
+
+
 def format_cost(row: Row) -> str:
     """Render the cost of a row for human consumption.
 
@@ -731,9 +1003,10 @@ def format_cost(row: Row) -> str:
     """
     if row.cost_usd is None:
         return UNKNOWN_COST
+    amount = format_amount(row.cost_usd, floor=not row.cost_known)
     if row.cost_known:
-        return str(row.cost_usd)
-    return f'{PARTIAL_PREFIX}{row.cost_usd}'
+        return amount
+    return f'{PARTIAL_PREFIX}{amount}'
 
 
 def row_to_dict(row: Row) -> dict[str, Any]:
@@ -825,13 +1098,51 @@ def _machine_payload(status: MachineStatus) -> dict[str, Any]:
     }
 
 
+def _as_group(item: Row | RowGroup) -> RowGroup:
+    """Return ``item`` as a group, wrapping a bare row without models.
+
+    Parameters
+    ----------
+    item : Row or RowGroup
+        What a caller passed to a renderer.
+
+    Returns
+    -------
+    RowGroup
+        The group; a bare row becomes a group with no children, which
+        renders exactly as it did before breakdowns existed.
+    """
+    return item if isinstance(item, RowGroup) else RowGroup(row=item)
+
+
+def _group_payload(group: RowGroup) -> dict[str, Any]:
+    """Convert a group into JSON-ready primitives.
+
+    Parameters
+    ----------
+    group : RowGroup
+        The aggregated group and its breakdown.
+
+    Returns
+    -------
+    dict
+        The row as :func:`row_to_dict` renders it, plus a ``models``
+        list when a breakdown is present. The key is omitted entirely
+        without one, so output without ``--breakdown`` is unchanged.
+    """
+    payload = row_to_dict(group.row)
+    if group.models:
+        payload['models'] = [row_to_dict(row) for row in group.models]
+    return payload
+
+
 def render_json(
-    rows: Iterable[Row],
+    rows: Iterable[Row | RowGroup],
     *,
     by: str = 'machine',
     since: dt.date | None = None,
     until: dt.date | None = None,
-    totals: Row | None = None,
+    totals: Row | RowGroup | None = None,
     summary: StatusSummary | None = None,
     statuses: Iterable[MachineStatus] | None = None,
 ) -> str:
@@ -839,13 +1150,13 @@ def render_json(
 
     Parameters
     ----------
-    rows : iterable of Row
-        Output of :func:`aggregate`.
+    rows : iterable of Row or RowGroup
+        Output of :func:`aggregate` or :func:`aggregate_grouped`.
     by : str, optional
         The grouping dimension, echoed in the document.
     since, until : datetime.date or None, optional
         The reporting interval, echoed as ISO dates.
-    totals : Row or None, optional
+    totals : Row or RowGroup or None, optional
         Fleet totals for the same interval.
     summary : StatusSummary or None, optional
         Status counters.
@@ -862,10 +1173,10 @@ def render_json(
         'group_by': by,
         'since': None if since is None else since.isoformat(),
         'until': None if until is None else until.isoformat(),
-        'rows': [row_to_dict(row) for row in rows],
+        'rows': [_group_payload(_as_group(row)) for row in rows],
     }
     if totals is not None:
-        payload['totals'] = row_to_dict(totals)
+        payload['totals'] = _group_payload(_as_group(totals))
     if summary is not None:
         payload['status'] = _status_payload(summary)
     if statuses is not None:
@@ -900,13 +1211,23 @@ def _csv_cell(value: object) -> str:
     return text
 
 
-def render_csv(rows: Iterable[Row]) -> str:
+def render_csv(
+    rows: Iterable[Row | RowGroup],
+    *,
+    breakdown: bool = False,
+) -> str:
     """Render the aggregation as CSV.
 
     Parameters
     ----------
-    rows : iterable of Row
-        Output of :func:`aggregate`.
+    rows : iterable of Row or RowGroup
+        Output of :func:`aggregate` or :func:`aggregate_grouped`.
+    breakdown : bool, optional
+        Append a ``model`` column and write one extra line per model
+        below each group. The group line leaves that column empty and
+        a model line repeats the ``key`` and ``label`` of its group, so
+        the result pivots on machine and model directly. Without this
+        the header is unchanged.
 
     Returns
     -------
@@ -914,13 +1235,48 @@ def render_csv(rows: Iterable[Row]) -> str:
         CSV text with a header row, LF line endings and no ANSI
         escape sequences.
     """
+    columns = (*CSV_COLUMNS, MODEL_COLUMN) if breakdown else CSV_COLUMNS
     stream = io.StringIO()
     writer = csv.writer(stream, lineterminator='\n')
-    writer.writerow(CSV_COLUMNS)
-    for row in rows:
-        payload = row_to_dict(row)
-        writer.writerow([_csv_cell(payload[name]) for name in CSV_COLUMNS])
+    writer.writerow(columns)
+    for item in rows:
+        group = _as_group(item)
+        for payload in _csv_payloads(group, breakdown=breakdown):
+            writer.writerow([_csv_cell(payload[name]) for name in columns])
     return stream.getvalue()
+
+
+def _csv_payloads(
+    group: RowGroup,
+    *,
+    breakdown: bool,
+) -> list[dict[str, Any]]:
+    """Return the CSV lines one group contributes.
+
+    Parameters
+    ----------
+    group : RowGroup
+        The aggregated group and its breakdown.
+    breakdown : bool
+        Whether the model lines are emitted.
+
+    Returns
+    -------
+    list of dict
+        The group line first, then one line per model.
+    """
+    parent = row_to_dict(group.row)
+    if not breakdown:
+        return [parent]
+    parent[MODEL_COLUMN] = ''
+    lines = [parent]
+    for model in group.models:
+        payload = row_to_dict(model)
+        payload['key'] = group.row.key
+        payload['label'] = group.row.label
+        payload[MODEL_COLUMN] = model.key
+        lines.append(payload)
+    return lines
 
 
 def _status_style(freshness: Freshness) -> str:
@@ -977,10 +1333,10 @@ def status_panel(
 
 
 def render_table(
-    rows: Iterable[Row],
+    rows: Iterable[Row | RowGroup],
     *,
     by: str = 'machine',
-    totals: Row | None = None,
+    totals: Row | RowGroup | None = None,
     summary: StatusSummary | None = None,
     statuses: Iterable[MachineStatus] = (),
     now: dt.datetime | None = None,
@@ -990,11 +1346,13 @@ def render_table(
 
     Parameters
     ----------
-    rows : iterable of Row
-        Output of :func:`aggregate`.
+    rows : iterable of Row or RowGroup
+        Output of :func:`aggregate` or :func:`aggregate_grouped`. A
+        group carrying models is followed by one indented sub-row per
+        model.
     by : str, optional
         The grouping dimension; it names the first column.
-    totals : Row or None, optional
+    totals : Row or RowGroup or None, optional
         Fleet totals, printed as a final row.
     summary : StatusSummary or None, optional
         When given, a status panel is printed above the table.
@@ -1006,7 +1364,7 @@ def render_table(
         Destination; defaults to the standard output console.
     """
     target = console if console is not None else out_console()
-    materialised = list(rows)
+    materialised = [_as_group(row) for row in rows]
     if summary is not None:
         target.print(status_panel(summary, statuses, now))
     heading = GROUP_LABELS.get(by, (by, by))[0]
@@ -1019,15 +1377,15 @@ def render_table(
     table.add_column('total', justify='right')
     table.add_column('records', justify='right')
     table.add_column('cost usd', justify='right')
-    for row in materialised:
-        table.add_row(*_table_cells(row))
+    for group in materialised:
+        _add_group(table, group)
     if totals is not None:
         table.add_section()
-        table.add_row(*_table_cells(totals, name='fleet total'))
+        _add_group(table, _as_group(totals), name='fleet total')
     target.print(table)
     if not materialised:
         target.print('no usage records in the selected period')
-    unpriced = sum(row.unknown_cost_records for row in materialised)
+    unpriced = sum(group.row.unknown_cost_records for group in materialised)
     if unpriced:
         target.print(
             f'{UNKNOWN_COST} = no priced record; '
@@ -1035,6 +1393,36 @@ def render_table(
             f'({unpriced} record(s) without a price)',
             style='dim',
         )
+
+
+def _add_group(
+    table: Table,
+    group: RowGroup,
+    name: str | None = None,
+) -> None:
+    """Add a group and its model sub-rows to the table.
+
+    Parameters
+    ----------
+    table : rich.table.Table
+        The table under construction.
+    group : RowGroup
+        The aggregated group and its breakdown.
+    name : str or None, optional
+        Override for the first cell of the group row.
+
+    Notes
+    -----
+    The sub-rows are drawn as a tree: every model but the last opens a
+    branch, the last one closes it, so the eye finds the end of a group
+    without reading the labels.
+    """
+    table.add_row(*_table_cells(group.row, name=name))
+    last = len(group.models) - 1
+    for index, model in enumerate(group.models):
+        branch = LAST_BRANCH_PREFIX if index == last else BRANCH_PREFIX
+        label = f'{branch}{escape(model.label)}'
+        table.add_row(*_table_cells(model, name=label), style='dim')
 
 
 def _table_cells(row: Row, name: str | None = None) -> list[str]:

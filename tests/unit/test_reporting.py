@@ -247,9 +247,9 @@ def test_unknown_cost_is_never_summed_as_zero(fleet):
     assert three.cost_usd is None
     assert reporting.format_cost(three) == reporting.UNKNOWN_COST
     one = row_by(rows, M1)
-    assert reporting.format_cost(one) == '>= 3.6000'
+    assert reporting.format_cost(one) == '>= 3.60'
     two = row_by(rows, M2)
-    assert reporting.format_cost(two) == '5.8500'
+    assert reporting.format_cost(two) == '5.85'
 
 
 def test_day_without_model_breakdown_is_attributed(tmp_path):
@@ -490,3 +490,282 @@ def test_render_table_reports_an_empty_period(fleet):
     console = Console(file=io.StringIO(), width=120, no_color=True)
     reporting.render_table([], by='day', console=console)
     assert 'no usage records' in console.file.getvalue()
+
+
+# --- cost formatting -------------------------------------------------
+
+
+def cost_row(amount, known=True):
+    return reporting.Row(
+        group='machine',
+        key='k',
+        label='k',
+        input_tokens=1,
+        output_tokens=0,
+        cache_create_tokens=0,
+        cache_read_tokens=0,
+        cost_usd=amount,
+        cost_known=known,
+        unknown_cost_records=0 if known else 1,
+        record_count=1,
+    )
+
+
+def test_format_cost_crops_to_cents():
+    assert reporting.format_cost(cost_row(Decimal('68.258780'))) == '68.26'
+    assert reporting.format_cost(cost_row(Decimal('0'))) == '0.00'
+    assert reporting.format_cost(cost_row(None, known=False)) == (
+        reporting.UNKNOWN_COST
+    )
+
+
+def test_format_cost_separates_thousands():
+    row = cost_row(Decimal('1234567.891234'))
+    assert reporting.format_cost(row) == '1,234,567.89'
+
+
+def test_format_cost_never_rounds_a_lower_bound_up():
+    assert reporting.format_cost(cost_row(Decimal('3.999999'))) == '4.00'
+    bound = cost_row(Decimal('3.999999'), known=False)
+    assert reporting.format_cost(bound) == '>= 3.99'
+
+
+def test_format_cost_marks_an_amount_below_a_cent():
+    tiny = cost_row(Decimal('0.004000'))
+    assert reporting.format_cost(tiny) == reporting.SUBCENT_COST
+    smallest = cost_row(Decimal('0.000001'))
+    assert reporting.format_cost(smallest) == reporting.SUBCENT_COST
+    bound = cost_row(Decimal('0.006000'), known=False)
+    assert reporting.format_cost(bound) == (
+        f'{reporting.PARTIAL_PREFIX}{reporting.SUBCENT_COST}'
+    )
+
+
+# --- model breakdown -------------------------------------------------
+
+
+def test_breakdown_keeps_the_rows_of_a_plain_aggregate(fleet):
+    plain = reporting.aggregate(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    assert [group.row for group in grouped] == plain
+
+
+def test_breakdown_sub_rows_sum_to_their_parent(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    for group in grouped:
+        assert group.models
+        assert sum(model.total_tokens for model in group.models) == (
+            group.row.total_tokens
+        )
+        assert sum(model.record_count for model in group.models) >= 1
+        priced = [
+            model.cost_usd
+            for model in group.models
+            if model.cost_usd is not None
+        ]
+        assert sum(priced, Decimal(0)) == (
+            group.row.cost_usd
+            if group.row.cost_usd is not None
+            else Decimal(0)
+        )
+
+
+def test_breakdown_orders_models_by_descending_cost(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    one = next(group for group in grouped if group.row.key == M1)
+    assert [model.key for model in one.models] == [
+        'claude-fable-5-1',
+        'claude-sonnet-4-6',
+        'gpt-5-codex',
+    ]
+    assert [model.cost_usd for model in one.models] == [
+        Decimal('3.2500'),
+        Decimal('0.2500'),
+        Decimal('0.1000'),
+    ]
+    assert one.models[2].cost_known is False
+
+
+def test_breakdown_puts_an_unpriced_model_last():
+    rows = [
+        reporting.Row(
+            group='model',
+            key=key,
+            label=key,
+            input_tokens=0,
+            output_tokens=0,
+            cache_create_tokens=0,
+            cache_read_tokens=0,
+            cost_usd=cost,
+            cost_known=cost is not None,
+            unknown_cost_records=0 if cost is not None else 1,
+            record_count=1,
+        )
+        for key, cost in (
+            ('a-unpriced', None),
+            ('z-cheap', Decimal('0.01')),
+        )
+    ]
+    assert sorted(rows, key=reporting._model_sort_key) == [rows[1], rows[0]]
+
+
+def test_breakdown_by_model_carries_no_children(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='model', since=FULL[0], until=FULL[1]
+    )
+    assert [group.row.key for group in grouped] == [
+        'claude-fable-5-1',
+        'claude-sonnet-4-6',
+        'gpt-5-codex',
+    ]
+    assert all(group.models == () for group in grouped)
+
+
+def test_fleet_totals_grouped_matches_the_model_aggregate(fleet):
+    total = reporting.fleet_totals_grouped(fleet, since=FULL[0], until=FULL[1])
+    assert total.row == reporting.fleet_totals(
+        fleet, since=FULL[0], until=FULL[1]
+    )
+    by_model = reporting.aggregate(
+        fleet, by='model', since=FULL[0], until=FULL[1]
+    )
+    assert sorted(total.models, key=lambda row: row.key) == by_model
+    assert [model.key for model in total.models] == [
+        'claude-fable-5-1',
+        'claude-sonnet-4-6',
+        'gpt-5-codex',
+    ]
+
+
+def test_breakdown_attributes_a_day_without_models(tmp_path):
+    payload = json.loads(
+        (FIXTURES / 'machines' / f'{M3}.json').read_text(encoding='utf-8')
+    )
+    payload['agents']['claude']['days'][0]['models'] = []
+    directory = tmp_path / 'data'
+    (directory / 'machines').mkdir(parents=True)
+    (directory / 'fleet.toml').write_text(
+        (FIXTURES / 'fleet.toml').read_text(encoding='utf-8'), encoding='utf-8'
+    )
+    (directory / 'machines' / f'{M3}.json').write_text(
+        json.dumps(payload), encoding='utf-8'
+    )
+    grouped = reporting.aggregate_grouped(load_fleet(directory), by='machine')
+    three = next(group for group in grouped if group.row.key == M3)
+    assert [model.key for model in three.models] == [reporting.UNKNOWN_MODEL]
+    assert three.models[0].total_tokens == three.row.total_tokens
+
+
+# --- breakdown rendering ---------------------------------------------
+
+
+def test_render_json_nests_the_model_rows(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    total = reporting.fleet_totals_grouped(fleet, since=FULL[0], until=FULL[1])
+    payload = json.loads(
+        reporting.render_json(
+            grouped, by='machine', since=FULL[0], until=FULL[1], totals=total
+        )
+    )
+    first = payload['rows'][0]
+    assert first['key'] == M1
+    assert [model['key'] for model in first['models']] == [
+        'claude-fable-5-1',
+        'claude-sonnet-4-6',
+        'gpt-5-codex',
+    ]
+    assert first['models'][0]['cost_usd'] == '3.2500'
+    assert payload['totals']['models'][0]['cost_usd'] == '8.7500'
+
+
+def test_render_json_omits_models_without_a_breakdown(fleet):
+    rows = reporting.aggregate(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    payload = json.loads(reporting.render_json(rows, by='machine'))
+    assert all('models' not in row for row in payload['rows'])
+
+
+def test_render_csv_adds_a_model_column_on_breakdown(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    text = reporting.render_csv(grouped, breakdown=True)
+    parsed = list(csv.reader(io.StringIO(text)))
+    header = parsed[0]
+    assert header == [*reporting.CSV_COLUMNS, reporting.MODEL_COLUMN]
+    assert parsed[1][header.index('model')] == ''
+    assert parsed[1][0] == M1
+    assert parsed[2][0] == M1
+    assert parsed[2][header.index('label')] == 'fedora-mobile'
+    assert parsed[2][header.index('model')] == 'claude-fable-5-1'
+    assert parsed[2][header.index('cost_usd')] == '3.2500'
+
+
+def test_render_csv_header_is_unchanged_without_a_breakdown(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    plain = reporting.aggregate(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    assert reporting.render_csv(grouped) == reporting.render_csv(plain)
+
+
+def rendered(groups, total=None, width=200):
+    console = Console(
+        file=io.StringIO(), width=width, no_color=True, highlight=False
+    )
+    reporting.render_table(groups, by='machine', totals=total, console=console)
+    return console.file.getvalue()
+
+
+def test_render_table_indents_the_model_sub_rows(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    total = reporting.fleet_totals_grouped(fleet, since=FULL[0], until=FULL[1])
+    text = rendered(grouped, total)
+    assert 'fedora-mobile' in text
+    assert '8.75' in text
+    lines = [line for line in text.splitlines() if 'claude-fable-5-1' in line]
+    assert len(lines) == 4  # three machines plus the fleet total
+
+
+def test_render_table_closes_every_branch_once(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    total = reporting.fleet_totals_grouped(fleet, since=FULL[0], until=FULL[1])
+    text = rendered(grouped, total)
+    opens = f'{reporting.BRANCH_PREFIX}claude-fable-5-1'
+    closes = f'{reporting.LAST_BRANCH_PREFIX}gpt-5-codex'
+    assert opens in text
+    assert closes in text
+    # Every group ends on exactly one closing branch.
+    groups_with_models = [group for group in (*grouped, total) if group.models]
+    closing = sum(
+        line.count(reporting.LAST_BRANCH_PREFIX) for line in text.splitlines()
+    )
+    assert closing == len(groups_with_models)
+
+
+def test_render_table_closes_a_lone_sub_row(fleet):
+    grouped = reporting.aggregate_grouped(
+        fleet, by='machine', since=FULL[0], until=FULL[1]
+    )
+    three = next(group for group in grouped if group.row.key == M3)
+    assert len(three.models) == 1
+    text = rendered([three])
+    assert f'{reporting.LAST_BRANCH_PREFIX}claude-fable-5-1' in text
+    assert reporting.BRANCH_PREFIX not in text
