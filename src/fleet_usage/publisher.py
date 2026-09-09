@@ -384,6 +384,36 @@ def write_due_marker(marker: Path, now: dt.datetime) -> None:
         _LOGGER.warning('cannot write the due marker %s: %s', marker, exc)
 
 
+DUE_SLACK = dt.timedelta(minutes=5)
+"""Tolerance for scheduler jitter in the ``--if-due`` check.
+
+Schedulers do not fire at exact intervals: the systemd timer adds up
+to two minutes of randomised delay and cron or Task Scheduler may run
+late or early by a few seconds. Two consecutive firings can therefore
+be slightly less than one interval apart, and a strict comparison
+would skip every such run. The slack is capped at a quarter of the
+interval so short intervals keep a meaningful gap.
+"""
+
+
+def due_threshold(interval_minutes: int) -> dt.timedelta:
+    """Minimum age of the last run for the next one to be due.
+
+    Parameters
+    ----------
+    interval_minutes : int
+        Configured publish interval.
+
+    Returns
+    -------
+    datetime.timedelta
+        The interval minus the jitter slack, never less than three
+        quarters of the interval.
+    """
+    interval = dt.timedelta(minutes=interval_minutes)
+    return interval - min(DUE_SLACK, interval / 4)
+
+
 def is_due(marker: Path, now: dt.datetime, interval_minutes: int) -> bool:
     """Whether a run is due according to the local marker.
 
@@ -399,14 +429,15 @@ def is_due(marker: Path, now: dt.datetime, interval_minutes: int) -> bool:
     Returns
     -------
     bool
-        ``True`` when there is no marker or it is older than the
-        interval.
+        ``True`` when there is no marker or the last run is at least
+        ``interval_minutes`` minus :data:`DUE_SLACK` old; see
+        :func:`due_threshold`.
     """
     last = read_due_marker(marker)
     if last is None:
         return True
     age = now.astimezone(dt.UTC) - last
-    return age >= dt.timedelta(minutes=interval_minutes)
+    return age >= due_threshold(interval_minutes)
 
 
 # -- helpers ---------------------------------------------------------

@@ -537,3 +537,53 @@ For an interrupted batch, record partial work and leave its remaining boxes open
   hourly from now on; linger is not enabled.
 - Next step: observe two natural firings for G5-04 and G6-06; then the
   servers (cron) and the Windows workstation.
+
+### 2026-09-09 — if-due jitter slack, Windows test hygiene, linger decision
+
+- History ID: HIST-009.
+- Request/context: after 20 natural timer firings the user asked for the
+  state of the tool; the review of `systemd.log` found 6 of 19 successful
+  firings reporting "not due yet", and an empty directory literally named
+  `C:\Users\me\logs` in the repository root.
+- Implementation tasks: IMP-502 hardened (`--if-due`); none newly
+  completed.
+- Changes: `src/fleet_usage/publisher.py` gained `DUE_SLACK` (5 minutes)
+  and `due_threshold()`; `is_due` now treats a run as due once the last
+  run is at least the interval minus the slack old, with the slack capped
+  at a quarter of the interval (60 → 55 min, 10 → 7.5 min). Tests in
+  `tests/unit/test_publisher.py` (jitter case and threshold table).
+  `tests/unit/test_scheduling_windows.py` passes a `tmp_path` log
+  directory to every scheduler that calls `install()`, which creates the
+  log directory; the literal Windows path had been created verbatim on
+  Linux in the current working directory. The stray directory was
+  removed; it was untracked and empty.
+- Decision changes: the systemd timer fires at :48 plus up to 120 s of
+  randomised delay, so consecutive firings can be 59 minutes apart. The
+  strict comparison skipped those runs and left two-hour gaps in the
+  ledger heartbeat. The interval is an eligibility floor with scheduler
+  jitter tolerance, not an exact spacing. Linger is not enabled on this
+  workstation by decision: usage only accrues while the user is logged
+  in, the user session (tmux, SSH) keeps the user manager alive, and
+  `Persistent=true` runs the catch-up at the next login. Recorded for
+  G5-12 documentation.
+- Validation: `uv run ruff check .`, `uv run ruff format --check .`,
+  `uv run mypy src/fleet_usage` clean; `uv run pytest -q` 736 passed;
+  no `C:*` entry in the repository root after the run. With the
+  `publisher.py` change stashed, the 6 new tests fail. The tool copy
+  under `~/.local/share/uv/tools/fleet-usage` was reinstalled with
+  `uv tool install --force .`, so the live timer runs the fix from the
+  next firing.
+- QA criteria/gates: none newly checked. G5-04 evidence: firings at :49
+  and :50 alternate because of the randomised delay; heartbeat gaps
+  observed 03:50, 06:50, 11:50 CEST on 2026-09-09 before the fix.
+- Environment: as HIST-008; 20 natural firings observed between
+  2026-09-08 17:50 and 2026-09-09 12:49 CEST, one failure (HIST-008
+  PATH), the rest exit 0.
+- Evidence: `systemd.log` and `fleet-usage.log` under the state
+  directory; uncommitted working tree.
+- Risks/limitations: cron and Windows backends have no randomised
+  delay, so the slack only makes them tolerant of late starts. A run
+  that starts early by more than the slack is still skipped by design.
+- Next step: observe the 13:48 CEST firing (first collection change
+  since 2026-09-08 17:49Z is pending) for G5-04 and G6-06; G3-03
+  read-only token; IMP-305.

@@ -689,6 +689,30 @@ def test_if_due_runs_once_the_interval_has_passed(
     assert payload['last_run_at'] == '2026-09-08T13:00:04Z'
 
 
+def test_if_due_tolerates_scheduler_jitter(app_paths):
+    # A systemd timer with RandomizedDelaySec can fire 59 minutes after
+    # the previous run; that run must not be skipped.
+    publisher.write_due_marker(
+        app_paths.due_marker, NOW - dt.timedelta(minutes=59)
+    )
+    assert publisher.is_due(app_paths.due_marker, NOW, 60) is True
+
+    publisher.write_due_marker(
+        app_paths.due_marker, NOW - dt.timedelta(minutes=54)
+    )
+    assert publisher.is_due(app_paths.due_marker, NOW, 60) is False
+
+
+@pytest.mark.parametrize(
+    ('interval', 'expected_minutes'),
+    [(60, 55), (120, 115), (30, 25), (10, 7.5), (4, 3)],
+)
+def test_due_threshold_caps_the_slack(interval, expected_minutes):
+    assert publisher.due_threshold(interval) == dt.timedelta(
+        minutes=expected_minutes
+    )
+
+
 def test_a_damaged_marker_never_blocks_a_run(app_paths):
     app_paths.state_dir.mkdir(parents=True, exist_ok=True)
     app_paths.due_marker.write_text('not json', encoding='utf-8')

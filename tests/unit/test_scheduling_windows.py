@@ -74,7 +74,8 @@ def make_scheduler(tmp_path, fake=None, **kwargs):
     }
     spec_interval = kwargs.pop('interval', 60)
     options.update(kwargs)
-    return WindowsScheduler(make_spec(interval=spec_interval), **options), fake
+    spec = make_spec(interval=spec_interval, log_dir=tmp_path / 'logs')
+    return WindowsScheduler(spec, **options), fake
 
 
 # ------------------------------------------------------------- triggers
@@ -302,7 +303,7 @@ def test_install_writes_the_definition_as_utf16(tmp_path):
         return RunResult(returncode=0)
 
     scheduler = WindowsScheduler(
-        make_spec(),
+        make_spec(log_dir=tmp_path / 'logs'),
         platform='win32',
         user='me',
         xml_dir=tmp_path / 'xml',
@@ -439,7 +440,7 @@ def path_scheduler(tmp_path, logon_mode, fake=None):
     """A scheduler whose collector lives outside the system directories."""
     fake = fake or FakeSchtasks()
     scheduler = WindowsScheduler(
-        make_spec(extra_path_dirs=(BUN_DIR,)),
+        make_spec(extra_path_dirs=(BUN_DIR,), log_dir=tmp_path / 'logs'),
         platform='win32',
         user='CORP\\me',
         logon_mode=logon_mode,

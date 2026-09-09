@@ -579,7 +579,9 @@ and spreadsheet-oriented CSV exports.
 Intervals are restricted to cron-expressible values, hourly by default. There
 is no minute tick. `publish --if-due` remains for login catch-up only. Define
 intervals as eligibility between collection attempts, not exact wall-clock
-delivery guarantees. Handle backward/forward clock changes and daylight-saving
+delivery guarantees; the due check tolerates scheduler jitter (five minutes,
+at most a quarter of the interval) so a firing slightly under one interval
+after the previous run is not skipped. Handle backward/forward clock changes and daylight-saving
 transitions without duplicate accounting.
 
 Linux: two backends in the first version. The systemd user timer uses
