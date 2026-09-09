@@ -212,7 +212,7 @@ class CollectorSettings(_Section):
     agents: list[str] = Field(default_factory=list)
     timezone: str = DEFAULT_TIMEZONE
     timeout_seconds: int = Field(default=180, gt=0)
-    offline_pricing: bool = True
+    offline_pricing: bool = False
 
     @field_validator('timezone')
     @classmethod
@@ -562,7 +562,7 @@ def render_settings_toml(
     agents: list[str] | None = None,
     timezone: str = DEFAULT_TIMEZONE,
     timeout_seconds: int = 180,
-    offline_pricing: bool = True,
+    offline_pricing: bool = False,
     freeze_window_days: int = 5,
     interval_minutes: int = 60,
     schedule_backend: str = 'auto',
@@ -601,7 +601,9 @@ def render_settings_toml(
     timeout_seconds : int, optional
         Collector timeout.
     offline_pricing : bool, optional
-        Whether to pass ``--offline``.
+        Whether to pass ``--offline``. Off by default: the bundled
+        pricing table only knows the models of the pinned collector
+        release, so newer models would be recorded as unpriced.
     freeze_window_days : int, optional
         Days after which a day record is settled.
     interval_minutes : int, optional

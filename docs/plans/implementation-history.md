@@ -587,3 +587,63 @@ For an interrupted batch, record partial work and leave its remaining boxes open
 - Next step: observe the 13:48 CEST firing (first collection change
   since 2026-09-08 17:49Z is pending) for G5-04 and G6-06; G3-03
   read-only token; IMP-305.
+
+### 2026-09-09 — Online pricing by default after the 13:48 firing
+
+- History ID: HIST-010.
+- Request: check the 13:48 CEST upload; bump the collector to a newer
+  ccusage release and allow online pricing without creating new
+  problems; then flip the default for the whole fleet.
+- Finding (13:48 firing): the run at 2026-09-09T11:49:04Z succeeded,
+  `uploaded 1, applied 1`, snapshot
+  `20260909T114904Z-d8f0bcc2.json` and the machine ledger both
+  committed; spool empty, lock released. The G5-04 and G6-06
+  observation from HIST-009 is therefore satisfied. The snapshot
+  carried `cost_status = 'unknown'` and `cost_usd = null` for
+  2026-09-08 (`claude-fable-5-1`, `gpt-6-astra`) and 2026-09-09
+  (`claude-fable-5-1`): the bundled offline table of ccusage 20.0.20
+  does not know models released after it, and `_classify_cost`
+  correctly reports zero-cost-with-tokens as unknown rather than free.
+- Collector version: no bump is possible. The npm registry reports
+  `dist-tags.latest = 20.0.20`, the newest of 132 published versions,
+  so the pin is already current and the unpriced days are not a stale
+  release. `command` and `version` are unchanged.
+- Changes: `src/fleet_usage/config.py` — `CollectorSettings.offline_pricing`
+  and the `render_settings` parameter both default to `False`, with the
+  reason recorded in the docstring; `init` now writes
+  `offline_pricing = false`. The assertion in
+  `tests/integration/test_cli_config_show.py` follows the rendered
+  default. The settings file on `stargazer` was switched ahead of the
+  default flip.
+- Decision changes: offline pricing is no longer the default. The
+  bundled table only prices the models of the pinned collector release,
+  so on a pinned collector every newly released model is permanently
+  unpriced; online pricing prices them and costs nothing in runtime.
+  Existing `settings.toml` files that state `offline_pricing = true`
+  keep offline pricing until edited; the default governs new
+  installations and files that omit the key.
+- Validation: measured against a live offline run of the same release,
+  online pricing prices all three previously unpriced model-days
+  (2026-09-08 `claude-fable-5-1` 18.262670, `gpt-6-astra` 3.818916;
+  2026-09-09 `claude-fable-5-1` 2.334524) and regresses none. Through
+  the library, `unknown`-cost days fell from 3 to 0 across both agents.
+  JSON shape is identical between modes. Both modes complete in under a
+  second, far inside `timeout_seconds = 180`. `doctor` all-ok;
+  `publish --dry-run` green. `uv run ruff check .`,
+  `uv run ruff format --check .`, `uv run mypy src/fleet_usage` clean;
+  `uv run pytest -q` 736 passed.
+- Risks/limitations: with online pricing and no network, ccusage exits 0
+  and returns zero costs instead of failing, so a collection made during
+  an outage records `unknown` rather than an error. The guard keeps a
+  false `$0.00` out of the ledger, but an outage lasting past the
+  five-day freeze window would settle those days uncosted under merge
+  rule 4. This is strictly better than offline pricing, which leaves new
+  models unpriced always. Online pricing also restates already-priced
+  days (`gpt-5.6-sol` 2026-08-09: 12.394082 offline against 9.505134
+  online, -23%), but every day through 2026-09-03 is already settled and
+  keeps its offline figure, so the ledger holds two pricing bases with a
+  discontinuity at 2026-09-04 and fleet totals sum across both. The
+  per-snapshot `collector.pricing` field remains the provenance;
+  nothing validates pricing consistency across snapshots.
+- Next step: G3-03 read-only token; IMP-305. Roll the setting out to the
+  remaining fleet machines as they are provisioned.

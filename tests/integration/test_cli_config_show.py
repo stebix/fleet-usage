@@ -49,4 +49,4 @@ def test_config_show_toml_uses_single_quotes(invoke):
     invoke('init', '--label', 'lab-1', '--repo', 'octo/data')
     result = invoke('config', 'show')
     assert "repository = 'octo/data'" in result.output
-    assert 'offline_pricing = true' in result.output
+    assert 'offline_pricing = false' in result.output
